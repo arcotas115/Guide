@@ -11,6 +11,52 @@ Read it before writing code. This file is the operating rules.
 
 ---
 
+## ⚠️ BUILT FOR 1,000+ INSTITUTIONS — LOAD-BEARING RULES (read before every feature)
+
+This product is NOT a small MVP for one or two colleges. The target is 1,000+
+institutions across many cities — hundreds of thousands to millions of concurrent users.
+The starting stack (Supabase) is the ON-RAMP and will be replaced at scale (dedicated /
+sharded / distributed Postgres, S3+CDN storage, caching layers). That evolution is
+PAINLESS only if the application is written scale-safe from line one. These rules are how.
+Honoring them costs nothing now and is CATASTROPHIC to retrofit onto live data across
+hundreds of institutions later. Follow them on EVERY feature, no exceptions.
+
+1. **Absolute tenant isolation.** Every table has `institution_id NOT NULL`. No exceptions,
+   ever. There is no such thing as a table without a tenant.
+2. **UUIDs for ALL primary keys** (`gen_random_uuid()`). Never auto-increment integers —
+   they collide across shards. UUIDs are shard-safe. This is impossible to change later
+   with live data, so it is locked from line one.
+3. **ZERO cross-tenant queries, ever.** Every query is scoped to exactly one institution
+   (WHERE institution_id = the current tenant). This includes admin and analytics queries.
+   Never SELECT/JOIN/aggregate across institutions. This single rule is what preserves
+   future sharding. If a query would span institutions, STOP — it's a landmine.
+4. **No foreign key ever crosses an institution boundary.** Every relationship stays
+   within one institution's data (a submission→assignment→offering→course all share the
+   same institution_id). This makes each tenant's data self-contained and shardable.
+5. **Every feature runs "for one tenant at a time."** The mental frame for every screen and
+   action: it operates on ONE institution's data, never across all colleges.
+6. **Database-agnostic app / standard SQL.** The core app speaks plain PostgreSQL.
+   Supabase's proprietary features are allowed ONLY at the edges (auth, storage) where they
+   are swappable. Never weave Supabase-only magic into business logic — it must be possible
+   to migrate the database to dedicated/sharded Postgres without changing the app.
+7. **Config-as-data for anything institution-specific.** Attendance thresholds, grading
+   schemes, term rules, section conventions — all live in config tables keyed by
+   institution_id and are READ by the app, never hardcoded. Institution #847 with a
+   different rule must be a config row, never a code change. (e.g. institutions.min_attendance_pct.)
+8. **Stateless application layer.** No server-side session stickiness. Next.js serverless is
+   already stateless — keep it that way so it scales horizontally across many servers.
+9. **Index every tenant-scoping column** (institution_id, and the join columns policies use)
+   so tenant-scoped queries stay fast as data grows huge.
+
+**DEFER (do NOT build now — building these for zero users is over-engineering):** actual
+database sharding, distributed databases, multi-region, Kubernetes, caching layers, load
+testing, advanced ops/monitoring. You build the SHARDABILITY (rules 1–9) now; you build the
+SHARDS and scale-infra later, funded by growth, WITHOUT rewriting the (correctly-designed)
+app. Start on Supabase, proceed with Milestone 0 exactly as planned — the scale-readiness is
+in the DISCIPLINE of the code, not in extra infrastructure today.
+
+---
+
 ## The stack (do not deviate without asking)
 
 - **Language:** TypeScript everywhere. Strict mode on. No plain JS files.

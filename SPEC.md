@@ -227,6 +227,15 @@ Offerings, Timetable) · PEOPLE (Students, Faculty, Enrolment).
 
 ## 4. Data model (Postgres / Supabase)
 
+**SCALE DISCIPLINE (target: 1,000+ institutions across many cities):** This schema is
+designed to be shardable by tenant. Enforce ALL of these (see CLAUDE.md load-bearing
+rules): every table has `institution_id NOT NULL`; all PKs are UUIDs; no foreign key
+crosses an institution boundary; every query is tenant-scoped (zero cross-tenant queries
+ever); institution-specific rules are config-as-data (not hardcoded); index every
+tenant-scoping column. The app speaks standard SQL so the DB can move to dedicated/sharded
+Postgres at scale without an app rewrite. Do NOT build sharding/infra now — build the
+shardability now, the shards later.
+
 Every domain table has `institution_id uuid not null references institutions(id)` and
 RLS enabled with policies keyed off the requesting user's profile. Timestamps
 (`created_at timestamptz not null default now()`) on everything. IDs are uuid default

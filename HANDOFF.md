@@ -241,6 +241,20 @@ and more features should come from real pilot users, not invented. Don't over-ad
 
 ## PART C — THE TECH STACK (locked)
 
+**SCALE TARGET: 1,000+ institutions across many cities (hundreds of thousands to millions
+of users) — NOT a one-or-two-college MVP.** The starting stack below is the ON-RAMP; at
+scale the database moves to dedicated/sharded/distributed Postgres, storage to S3+CDN, plus
+caching and regional infra. That evolution is painless ONLY because the app is built
+scale-safe from line one. The load-bearing rules that guarantee this (enforced in CLAUDE.md
+on every build): every table `institution_id NOT NULL`; UUID primary keys everywhere; ZERO
+cross-tenant queries ever; no foreign key crossing an institution boundary; every feature
+runs for one tenant at a time; database-agnostic app speaking standard SQL (Supabase
+proprietary features only at the edges — auth, storage); config-as-data for all
+institution-specific rules; stateless app layer; index every tenant-scoping column. DEFER
+the actual sharding/distributed-infra/caching/multi-region until growth justifies it —
+build the SHARDABILITY now, the SHARDS later. This discipline is cheap now and catastrophic
+to retrofit onto live data across hundreds of institutions.
+
 - **Language:** TypeScript everywhere, strict mode. No plain JS.
 - **Framework:** Next.js (App Router, latest stable). Frontend + backend in one app.
 - **Database / Auth / Storage:** Supabase (Postgres). Use `@supabase/ssr` (browser +
