@@ -56,10 +56,16 @@ export type DerivedState = {
 /**
  * `now` is a parameter, not `new Date()` inside, so this is a pure function that
  * can be tested at any point on the timeline.
+ *
+ * `timeZone` is required because this function BUILDS THE LABEL — "Due 12 Aug",
+ * "Opens 2 Sep" — and a date is not renderable without a zone. It comes from
+ * institutions.timezone; there is deliberately no default, so a new caller
+ * cannot forget it and quietly render Indian time for a college elsewhere.
  */
 export function deriveAssignmentState(
   input: AssignmentStateInput,
-  now: Date = new Date(),
+  now: Date,
+  timeZone: string,
 ): DerivedState {
   // allowLate/lateUntil are read through the helpers below rather than here,
   // so the window rules live in exactly one place.
@@ -84,7 +90,7 @@ export function deriveAssignmentState(
   if (submittedAt) {
     return {
       state: 'submitted',
-      label: `Submitted ${formatDay(submittedAt)} · awaiting grade`,
+      label: `Submitted ${formatDay(submittedAt, timeZone, now)} · awaiting grade`,
       isUrgent: false,
       acceptingUntil: null,
       canSubmit: status === 'open' && isStillAccepting(input, now),
@@ -95,7 +101,7 @@ export function deriveAssignmentState(
   if (opensAt && opensAt > now) {
     return {
       state: 'upcoming',
-      label: `Opens ${formatDay(opensAt)}`,
+      label: `Opens ${formatDay(opensAt, timeZone, now)}`,
       isUrgent: false,
       acceptingUntil: null,
       canSubmit: false,
@@ -114,10 +120,10 @@ export function deriveAssignmentState(
     return {
       state: 'overdue',
       label: acceptingUntil
-        ? `Overdue · accepted till ${formatDay(acceptingUntil)}`
+        ? `Overdue · accepted till ${formatDay(acceptingUntil, timeZone, now)}`
         : status === 'closed' && !pastDue
           ? 'Closed'
-          : `Overdue · was due ${formatDay(dueAt)}`,
+          : `Overdue · was due ${formatDay(dueAt, timeZone, now)}`,
       isUrgent: true,
       acceptingUntil,
       canSubmit: status === 'open' && acceptingUntil !== null,
@@ -127,7 +133,7 @@ export function deriveAssignmentState(
   // 5. Open and waiting.
   return {
     state: 'open',
-    label: `Due ${formatDay(dueAt)}`,
+    label: `Due ${formatDay(dueAt, timeZone, now)}`,
     isUrgent: false,
     acceptingUntil: null,
     canSubmit: status === 'open',
@@ -192,14 +198,21 @@ export type FacultyAssignmentLike = {
 /** The assignment's own state, with no student in the picture. */
 export function deriveForFaculty(
   a: FacultyAssignmentLike,
-  now: Date = new Date(),
+  now: Date,
+  timeZone: string,
 ): DerivedState {
   return deriveAssignmentState(
     { ...a, submittedAt: null, hasVisibleGrade: false },
     now,
+    timeZone,
   );
 }
 
+/**
+ * Grouping needs no timezone — it compares instants, and an instant is the same
+ * moment everywhere. Only the LABEL needs a zone, which is why deriveForFaculty
+ * takes one and this does not.
+ */
 export function facultyGroupFor(
   a: FacultyAssignmentLike,
   now: Date = new Date(),
@@ -209,8 +222,12 @@ export function facultyGroupFor(
   if (a.status === 'draft') return 'draft';
   if (a.status === 'closed') return 'closed';
 
-  // Everything still open is placed by what the dates actually say.
-  return deriveForFaculty(a, now).state === 'upcoming' ? 'scheduled' : 'waiting';
+  // Everything still open is placed by what the dates actually say. The zone
+  // passed here is irrelevant to the branch taken — only to the label, which is
+  // discarded — so UTC is used rather than pretending a real one is needed.
+  return deriveForFaculty(a, now, 'UTC').state === 'upcoming'
+    ? 'scheduled'
+    : 'waiting';
 }
 
 /** Tailwind classes per state. Kept beside the derivation so a new state cannot

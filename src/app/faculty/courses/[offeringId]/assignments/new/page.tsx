@@ -12,13 +12,13 @@ export default async function NewAssignmentPage({
   params: Promise<{ offeringId: string }>;
 }) {
   const { offeringId } = await params;
-  await requireRole('faculty');
+  const profile = await requireRole('faculty');
 
   return (
     <AssignmentForm
       mode="create"
       offeringId={offeringId}
-      defaultValues={defaultAssignmentValues()}
+      defaultValues={defaultAssignmentValues(profile.timeZone)}
       // Bound on the server: the offering id is baked into the closure rather
       // than posted by the client, so it cannot be swapped for someone else's
       // course on the way to the action.

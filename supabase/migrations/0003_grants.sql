@@ -84,6 +84,32 @@ grant execute on all functions in schema public
 
 
 -- ---------------------------------------------------------------------------
+-- 4b. Append-only tables — the exception to section 2
+--
+-- Section 2 grants UPDATE and DELETE on ALL tables, which would quietly undo
+-- append-only every time this file is re-run. That is precisely the failure
+-- mode this file's own "re-run me after adding a table" instruction would
+-- cause, so the exceptions are listed here rather than left to memory.
+--
+-- RLS already denies these (no UPDATE or DELETE policy exists on
+-- grade_history), so this is the second lock, not the only one. Both, because
+-- an audit log is worth two.
+-- ---------------------------------------------------------------------------
+do $$
+declare t text;
+begin
+  foreach t in array array['grade_history']
+  loop
+    if to_regclass('public.' || t) is not null then
+      execute format(
+        'revoke update, delete on public.%I from authenticated, service_role', t);
+      execute format('revoke insert on public.%I from authenticated', t);
+    end if;
+  end loop;
+end $$;
+
+
+-- ---------------------------------------------------------------------------
 -- 5. anon stays shut
 --    There is no signed-out surface in this product: every screen is behind a
 --    login. Re-stated here (0002 does it too) so that this file alone is a

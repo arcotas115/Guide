@@ -44,7 +44,8 @@ export async function createAssignment(
   const { profile } = await authorise(offeringId);
   if (!profile) return fail('You do not teach this course.');
 
-  const prep = prepareAssignmentWrite(intent, input);
+  // The zone comes from the institution on the server, never from the client.
+  const prep = prepareAssignmentWrite(intent, input, profile.timeZone);
   if (!prep.ok) return prep.state;
 
   const supabase = await createClient();
@@ -71,7 +72,8 @@ export async function updateAssignment(
   const { profile } = await authorise(offeringId);
   if (!profile) return fail('You do not teach this course.');
 
-  const prep = prepareAssignmentWrite(intent, input);
+  // The zone comes from the institution on the server, never from the client.
+  const prep = prepareAssignmentWrite(intent, input, profile.timeZone);
   if (!prep.ok) return prep.state;
 
   const supabase = await createClient();

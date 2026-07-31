@@ -43,9 +43,11 @@ await db.exec(migration('0001_init_schema.sql'));
 await db.exec(migration('0002_rls_policies.sql'));
 await db.exec(migration('0003_grants.sql'));
 await db.exec(migration('0004_assignment_fields_and_grade_split.sql'));
-// 0004 creates a table, so 0003's ON ALL TABLES snapshot is stale — exactly the
-// re-run the migration's own header tells you to do. Doing it here means the
-// suite fails if that instruction is ever wrong.
+await db.exec(migration('0005_foundations.sql'));
+// Both 0004 and 0005 create a table, so 0003's ON ALL TABLES snapshot is stale
+// — exactly the re-run those migrations' headers tell you to do. Doing it here
+// means the suite fails if that instruction is ever wrong, and it proves the
+// re-run does not re-grant UPDATE on the append-only table.
 await db.exec(migration('0003_grants.sql'));
 
 // --- Test harness -----------------------------------------------------------
@@ -539,6 +541,194 @@ await expectDenied(
   newAssignment(', late_penalty_pct_per_day', `, -5`),
   [ids.instA, ids.offerA, ids.profA],
 );
+
+// ============================================================================
+// FOUNDATIONS (0005) — timezone, audit trail, append-only grade history
+// ============================================================================
+console.log(`\n\x1b[1mTIMEZONE — config-as-data, shape enforced\x1b[0m`);
+
+check('an institution gets IST by default',
+  (await db.query(`select timezone from public.institutions where id = $1`, [ids.instA])).rows[0].timezone,
+  'Asia/Kolkata');
+
+await db.query(`update public.institutions set timezone = 'America/New_York' where id = $1`, [ids.instB]);
+check('a second institution can run in another zone',
+  (await db.query(`select timezone from public.institutions where id = $1`, [ids.instB])).rows[0].timezone,
+  'America/New_York');
+
+// The CHECK is a shape test, not a catalogue lookup — see the reasoning in
+// 0005. It should reject the shapes a human actually fat-fingers.
+for (const [label, value] of [
+  ['an empty timezone', ''],
+  ['a bare abbreviation like IST', 'IST'],
+  ['a zone with trailing whitespace', 'Asia/Kolkata '],
+  ['free text', 'India Standard Time'],
+]) {
+  await expectDenied(`${label} is rejected`,
+    `update public.institutions set timezone = $1 where id = $2`, [value, ids.instA]);
+}
+check('UTC is allowed',
+  (await db.query(`select 'UTC' ~ '^[A-Za-z][A-Za-z_-]+/[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)?$' or 'UTC' = 'UTC' as v`)).rows[0].v,
+  true);
+await expectUnchanged('...and Alpha is still on IST after those attempts',
+  `select timezone as v from public.institutions where id = $1`, [ids.instA], 'Asia/Kolkata');
+
+
+console.log(`\n\x1b[1mGRADE_HISTORY — written by the database, not the app\x1b[0m`);
+{
+  const subId = crypto.randomUUID();
+  await db.query(
+    `insert into public.submissions (id, institution_id, assignment_id, student_id) values ($1,$2,$3,$4)`,
+    [subId, ids.instA, ids.asgDraft, ids.studA2]);
+
+  const historyFor = () => count(
+    `select count(*)::int as n from public.grade_history where submission_id = $1`, [subId]);
+
+  // First mark. The application sets updated_by; the trigger reads it, so the
+  // actor is recorded without the database knowing anything about auth.
+  await db.query(
+    `insert into public.submission_grades (submission_id, institution_id, grade, feedback, graded_by, updated_by)
+       values ($1,$2,12,'Needs a clearer proof.',$3,$3)`,
+    [subId, ids.instA, ids.profA]);
+
+  check('saving a grade writes exactly one history row', await historyFor(), 1);
+  {
+    const { rows } = await db.query(
+      `select old_grade, new_grade::text as new_grade, changed_by from public.grade_history where submission_id = $1`,
+      [subId]);
+    check('...with old_grade null, because there was nothing before', rows[0].old_grade, null);
+    check('...and the new grade recorded', rows[0].new_grade, '12.00');
+    check('...and the actor taken from updated_by', rows[0].changed_by, ids.profA);
+  }
+
+  // A post-publish correction, by a DIFFERENT person. graded_by stays as who
+  // first marked it; updated_by becomes who changed it. That difference is the
+  // entire reason both columns exist.
+  await db.query(
+    `update public.submission_grades set grade = 18, feedback = 'Re-marked after review.', updated_by = $2
+       where submission_id = $1`,
+    [subId, ids.adminA]);
+
+  check('changing the grade writes a second row', await historyFor(), 2);
+  {
+    // Selected by CONTENT, not by `order by changed_at desc limit 1`.
+    // now() resolves to the millisecond, so two rows written in quick
+    // succession tie and the ordering picks one arbitrarily — which made this
+    // assertion pass or fail depending on how fast the machine was. The
+    // correction is the row that has something to replace.
+    const { rows } = await db.query(
+      `select old_grade::text as old_grade, new_grade::text as new_grade, old_feedback, changed_by
+         from public.grade_history where submission_id = $1 and old_grade is not null`,
+      [subId]);
+    check('...carrying the value it replaced', rows[0].old_grade, '12.00');
+    check('...and the value that replaced it', rows[0].new_grade, '18.00');
+    check('...and the feedback it replaced', rows[0].old_feedback, 'Needs a clearer proof.');
+    check('...and the person who changed it, not the original marker', rows[0].changed_by, ids.adminA);
+  }
+  await expectUnchanged('graded_by still records who FIRST marked it',
+    `select graded_by as v from public.submission_grades where submission_id = $1`, [subId], ids.profA);
+
+  // An update that changes nothing is not a change.
+  await db.query(
+    `update public.submission_grades set feedback = 'Re-marked after review.' where submission_id = $1`, [subId]);
+  check('a no-op update writes no history row', await historyFor(), 2);
+
+  // ---- Append-only, asserted rather than assumed -------------------------
+  await asUser(ids.profA, async () => {
+    await expectDenied('a professor cannot edit a history row',
+      `update public.grade_history set new_grade = 100 where submission_id = $1`, [subId]);
+    await expectDenied('a professor cannot delete a history row',
+      `delete from public.grade_history where submission_id = $1`, [subId]);
+    await expectDenied('a professor cannot forge a history row',
+      `insert into public.grade_history (institution_id, submission_id, new_grade) values ($1,$2,99)`,
+      [ids.instA, subId]);
+  });
+  await asUser(ids.adminA, async () => {
+    await expectDenied('an admin cannot edit a history row either',
+      `update public.grade_history set new_grade = 100 where submission_id = $1`, [subId]);
+    await expectDenied('an admin cannot delete one either',
+      `delete from public.grade_history where submission_id = $1`, [subId]);
+  });
+  await expectUnchanged('...and the correction still records 18',
+    `select new_grade::text as v from public.grade_history where submission_id = $1 and old_grade is not null`,
+    [subId], '18.00');
+  check('...with both rows intact', await historyFor(), 2);
+
+  // ---- Who may read it ---------------------------------------------------
+  await asUser(ids.profA, async () => {
+    check('the professor who teaches the course can read the history',
+      await count(`select count(*)::int as n from public.grade_history where submission_id = $1`, [subId]), 2);
+  });
+  await asUser(ids.adminA, async () => {
+    check('an admin in the institution can read it',
+      await count(`select count(*)::int as n from public.grade_history where submission_id = $1`, [subId]), 2);
+  });
+  await asUser(ids.profA2, async () => {
+    check('a professor who does not teach the course cannot',
+      await count(`select count(*)::int as n from public.grade_history`), 0);
+  });
+
+  // THE ONE THAT MATTERS. "Your grade was changed from 12 to 18" would undo the
+  // whole publish flow, so a student must not see this even once grades are out.
+  await asUser(ids.studA2, async () => {
+    check('the student it belongs to cannot read their own history',
+      await count(`select count(*)::int as n from public.grade_history`), 0);
+  });
+  await db.query(`update public.assignments set grades_released = true where id = $1`, [ids.asgDraft]);
+  await asUser(ids.studA2, async () => {
+    check('...and STILL cannot after grades_released is true',
+      await count(`select count(*)::int as n from public.grade_history`), 0);
+    check('...even though the grade itself is now visible to them',
+      await count(`select count(*)::int as n from public.submission_grades where submission_id = $1`, [subId]), 1);
+  });
+  await asUser(ids.studB1, async () => {
+    check('a student at another college sees no history at all',
+      await count(`select count(*)::int as n from public.grade_history`), 0);
+  });
+  await db.query(`update public.assignments set grades_released = false where id = $1`, [ids.asgDraft]);
+}
+
+
+console.log(`\n\x1b[1mAUDIT COLUMNS — updated_at by trigger, updated_by by the app\x1b[0m`);
+{
+  const before = (await db.query(
+    `select updated_at from public.assignments where id = $1`, [ids.asgOpen])).rows[0].updated_at;
+
+  await db.query(
+    `update public.assignments set title = 'Lab 4 — retitled', updated_by = $2 where id = $1`,
+    [ids.asgOpen, ids.profA]);
+
+  const { rows } = await db.query(
+    `select updated_at, updated_by from public.assignments where id = $1`, [ids.asgOpen]);
+  check('updated_at moves without anyone setting it', rows[0].updated_at > before, true);
+  check('updated_by is whoever the application named', rows[0].updated_by, ids.profA);
+}
+
+
+console.log(`\n\x1b[1mLEFTOVERS FROM 1A — the database now agrees with zod\x1b[0m`);
+{
+  const newAsg = (cols, vals) =>
+    `insert into public.assignments (institution_id, offering_id, created_by, title, marks, due_at${cols})
+       values ($1,$2,$3,'Constraint probe',20,'2026-09-10 23:59+05:30'${vals})`;
+
+  await expectDenied('an assignment with no way to submit is rejected',
+    newAsg(', accept_file, accept_link, accept_text', ', false, false, false'),
+    [ids.instA, ids.offerA, ids.profA]);
+
+  await expectDenied('marks of zero is rejected by the database, not only by zod',
+    `insert into public.assignments (institution_id, offering_id, created_by, title, marks, due_at)
+       values ($1,$2,$3,'Zero marks',0,'2026-09-10 23:59+05:30')`,
+    [ids.instA, ids.offerA, ids.profA]);
+
+  await expectDenied('negative marks too',
+    `insert into public.assignments (institution_id, offering_id, created_by, title, marks, due_at)
+       values ($1,$2,$3,'Negative',-1,'2026-09-10 23:59+05:30')`,
+    [ids.instA, ids.offerA, ids.profA]);
+
+  check('allow_multiple_attempts defaults to true',
+    (await db.query(`select allow_multiple_attempts as v from public.assignments where id = $1`, [ids.asgOpen])).rows[0].v,
+    true);
+}
 
 // ============================================================================
 // GRANTS (0003) — the outer door, distinct from the RLS lock.

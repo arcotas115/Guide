@@ -35,7 +35,7 @@
  * the due date" and a 23514 check violation.
  */
 import { z } from 'zod';
-import { fromDateTimeLocalValue } from '@/lib/format';
+import { fromDateTimeLocalValue, isValidDateTimeLocal } from '@/lib/format';
 
 /* ---------------------------------------------------------------------------
  * Numbers
@@ -142,9 +142,7 @@ const BAD_DATE = 'That date and time does not look right.';
 const optionalDateTime = z
   .string()
   .trim()
-  .refine((v) => v === '' || fromDateTimeLocalValue(v) !== null, {
-    message: BAD_DATE,
-  })
+  .refine((v) => v === '' || isValidDateTimeLocal(v), { message: BAD_DATE })
   .optional()
   .default('');
 
@@ -152,7 +150,7 @@ const requiredDateTime = z
   .string({ error: 'Pick a due date.' })
   .trim()
   .min(1, 'Pick a due date.')
-  .refine((v) => fromDateTimeLocalValue(v) !== null, { message: BAD_DATE });
+  .refine(isValidDateTimeLocal, { message: BAD_DATE });
 
 /* ---------------------------------------------------------------------------
  * The schema
@@ -210,9 +208,20 @@ export const assignmentFormSchema = z
     acceptText: booleanField(true),
   })
   .superRefine((v, ctx) => {
-    const opensAt = v.opensAt ? fromDateTimeLocalValue(v.opensAt) : null;
-    const dueAt = fromDateTimeLocalValue(v.dueAt);
-    const lateUntil = v.lateUntil ? fromDateTimeLocalValue(v.lateUntil) : null;
+    // The three dates are compared AS STRINGS, not as instants, and that is
+    // both correct and deliberate. They are zero-padded "YYYY-MM-DDTHH:mm"
+    // wall-clock times in one institution's zone, so lexicographic order IS
+    // chronological order — and comparing wall clocks directly cannot be
+    // confused by a daylight-saving transition the way converting each to an
+    // instant first can.
+    //
+    // It also keeps this schema free of any timezone, which matters because it
+    // runs in the browser too, where there is no institution row to read one
+    // from. The zone enters exactly once, in toAssignmentRow below, on the
+    // server.
+    const opensAt = v.opensAt || null;
+    const dueAt = v.dueAt;
+    const lateUntil = v.lateUntil || null;
 
     if (opensAt && dueAt && dueAt <= opensAt) {
       ctx.addIssue({
@@ -265,20 +274,28 @@ export type AssignmentFormParsed = z.output<typeof assignmentFormSchema>;
 export const assignmentIntentSchema = z.enum(['publish', 'draft', 'close']);
 export type AssignmentIntent = z.infer<typeof assignmentIntentSchema>;
 
-/** Turn validated form values into the row shape the database expects. */
-export function toAssignmentRow(v: AssignmentFormParsed) {
+/**
+ * Turn validated form values into the row shape the database expects.
+ *
+ * THE ONLY PLACE THE TIMEZONE ENTERS. A wall-clock string becomes an instant
+ * here and nowhere else, which is why this runs on the server, where the
+ * institution's zone is known.
+ */
+export function toAssignmentRow(v: AssignmentFormParsed, timeZone: string) {
   return {
     title: v.title,
     instructions: v.instructions || null,
     marks: v.marks,
-    opens_at: v.opensAt ? fromDateTimeLocalValue(v.opensAt)?.toISOString() : null,
-    due_at: fromDateTimeLocalValue(v.dueAt)!.toISOString(),
+    opens_at: v.opensAt
+      ? fromDateTimeLocalValue(v.opensAt, timeZone)?.toISOString()
+      : null,
+    due_at: fromDateTimeLocalValue(v.dueAt, timeZone)!.toISOString(),
     allow_late: v.allowLate,
     // Enforced by the schema above too, but belt-and-braces: a late window can
     // never be persisted alongside allow_late = false, whatever the form sent.
     late_until:
       v.allowLate && v.lateUntil
-        ? fromDateTimeLocalValue(v.lateUntil)?.toISOString()
+        ? fromDateTimeLocalValue(v.lateUntil, timeZone)?.toISOString()
         : null,
     late_penalty_pct_per_day: v.latePenaltyPctPerDay,
     hide_names_while_grading: v.hideNamesWhileGrading,

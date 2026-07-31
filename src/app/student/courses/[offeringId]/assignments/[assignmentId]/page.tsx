@@ -34,6 +34,7 @@ export default async function StudentAssignmentPage({
   if (!assignment) notFound();
 
   const { derived } = assignment;
+  const tz = profile.timeZone;
 
   return (
     <>
@@ -69,7 +70,7 @@ export default async function StudentAssignmentPage({
 
           {derived.state === 'submitted' && assignment.submittedAt ? (
             <p className="text-moss-deep mt-1.5 text-[13.5px]">
-              ✓ Received {formatDateTime(assignment.submittedAt)}
+              ✓ Received {formatDateTime(assignment.submittedAt, tz)}
             </p>
           ) : null}
 
@@ -79,9 +80,9 @@ export default async function StudentAssignmentPage({
                 derived.isUrgent ? 'text-rust-deep/85' : 'text-subtle'
               }`}
             >
-              Due {formatDateTime(assignment.dueAt)}
+              Due {formatDateTime(assignment.dueAt, tz)}
               {derived.acceptingUntil
-                ? ` · late work accepted till ${formatDateTime(derived.acceptingUntil)}`
+                ? ` · late work accepted till ${formatDateTime(derived.acceptingUntil, tz)}`
                 : ''}
             </p>
           ) : null}
@@ -131,10 +132,10 @@ export default async function StudentAssignmentPage({
               {assignment.opensAt ? (
                 <Row
                   label="Opened"
-                  value={formatDateTime(assignment.opensAt)}
+                  value={formatDateTime(assignment.opensAt, tz)}
                 />
               ) : null}
-              <Row label="Due" value={formatDateTime(assignment.dueAt)} />
+              <Row label="Due" value={formatDateTime(assignment.dueAt, tz)} />
               <Row label="You can submit" value={acceptedTypes(assignment)} />
             </dl>
           </Card>

@@ -21,11 +21,17 @@ import {
   fromDateTimeLocalValue,
   toDateTimeLocalValue,
   formatDay,
+  formatDateTime,
 } from '../src/lib/format';
 import {
   defaultAssignmentValues,
   assignmentToFormValues,
 } from '../src/lib/assignments/defaults';
+import { DEFAULT_TIME_ZONE, isValidTimeZone } from '../src/lib/timezone';
+
+/** The institution's zone. Passed explicitly everywhere, never defaulted — see
+ *  the note in src/lib/format.ts about why there is no fallback. */
+const IST = DEFAULT_TIME_ZONE;
 
 let passed = 0;
 let failed = 0;
@@ -76,7 +82,7 @@ const baseInput: AssignmentStateInput = {
   hasVisibleGrade: false,
 };
 const state = (patch: Partial<AssignmentStateInput>) =>
-  deriveAssignmentState({ ...baseInput, ...patch }, NOW);
+  deriveAssignmentState({ ...baseInput, ...patch }, NOW, IST);
 
 // ============================================================================
 console.log('\n\x1b[1mDERIVED STATES — the five, and nothing stored\x1b[0m');
@@ -154,12 +160,73 @@ check(
 // ============================================================================
 console.log('\n\x1b[1mTIMEZONE — deadlines must not move\x1b[0m');
 {
-  const d = fromDateTimeLocalValue('2026-08-12T23:59');
+  const d = fromDateTimeLocalValue('2026-08-12T23:59', IST);
   check('a datetime-local value parses as IST, not as UTC', d?.toISOString(), '2026-08-12T18:29:00.000Z');
-  check('round-trips back to the same wall clock', toDateTimeLocalValue(d!), '2026-08-12T23:59');
-  check('midnight round-trips (the 24 vs 00 trap)', toDateTimeLocalValue(fromDateTimeLocalValue('2026-08-12T00:00')!), '2026-08-12T00:00');
-  check('a deadline late on the 12th IST still reads "12 Aug"', formatDay(d!, NOW), '12 Aug');
-  check('garbage is rejected rather than becoming Invalid Date', fromDateTimeLocalValue('not a date'), null);
+  check('round-trips back to the same wall clock', toDateTimeLocalValue(d!, IST), '2026-08-12T23:59');
+  check('midnight round-trips (the 24 vs 00 trap)', toDateTimeLocalValue(fromDateTimeLocalValue('2026-08-12T00:00', IST)!, IST), '2026-08-12T00:00');
+  check('a deadline late on the 12th IST still reads "12 Aug"', formatDay(d!, IST, NOW), '12 Aug');
+  check('garbage is rejected rather than becoming Invalid Date', fromDateTimeLocalValue('not a date', IST), null);
+}
+
+// ============================================================================
+console.log('\n\x1b[1mTIMEZONE IS CONFIG, NOT A CONSTANT\x1b[0m');
+{
+  // One instant. Two institutions. The rendering must differ, or the zone is
+  // not actually being read — which is the whole failure this session exists to
+  // remove. 2026-08-12T23:59 IST is 2026-08-12T14:29 in New York, still the
+  // 12th; 18:29 UTC on the 12th is the 13th in Auckland.
+  const deadline = new Date('2026-08-12T18:29:00.000Z');
+
+  check('Kolkata renders it as 12 Aug', formatDay(deadline, 'Asia/Kolkata', NOW), '12 Aug');
+  check(
+    'New York renders the same instant as 12 Aug too',
+    formatDay(deadline, 'America/New_York', NOW),
+    '12 Aug',
+  );
+  check(
+    '...but Auckland has already turned over to 13 Aug',
+    formatDay(deadline, 'Pacific/Auckland', NOW),
+    '13 Aug',
+  );
+
+  const kolkata = formatDateTime(deadline, 'Asia/Kolkata', NOW);
+  const newYork = formatDateTime(deadline, 'America/New_York', NOW);
+  check('the wall-clock time differs between institutions', kolkata !== newYork, true);
+  check('...Kolkata sees 11:59 pm', kolkata, '12 Aug, 11:59 pm');
+  check('...New York sees 2:29 pm', newYork, '12 Aug, 2:29 pm');
+
+  // A professor typing "23:59" means 23:59 where THEY are. The instant that
+  // produces must therefore differ by zone — if it did not, the conversion
+  // would be ignoring the argument.
+  const istInstant = fromDateTimeLocalValue('2026-08-12T23:59', 'Asia/Kolkata');
+  const nycInstant = fromDateTimeLocalValue('2026-08-12T23:59', 'America/New_York');
+  check('the same wall clock is a different instant per zone', istInstant!.getTime() !== nycInstant!.getTime(), true);
+  check('IST 23:59 is 18:29 UTC', istInstant!.toISOString(), '2026-08-12T18:29:00.000Z');
+  check('New York 23:59 is 03:59 UTC the next day', nycInstant!.toISOString(), '2026-08-13T03:59:00.000Z');
+
+  // Round-tripping must be stable in whichever zone it happens.
+  for (const zone of ['Asia/Kolkata', 'America/New_York', 'Europe/London', 'UTC']) {
+    check(
+      `${zone} round-trips a wall clock unchanged`,
+      toDateTimeLocalValue(fromDateTimeLocalValue('2026-08-12T23:59', zone)!, zone),
+      '2026-08-12T23:59',
+    );
+  }
+
+  // Validation is against Intl — the database that actually renders — not
+  // against Postgres's separate zone catalogue.
+  check('a real zone validates', isValidTimeZone('Asia/Dubai'), true);
+  check('UTC validates', isValidTimeZone('UTC'), true);
+  check('a typo does not', isValidTimeZone('Asia/Kolkatta'), false);
+  // ICU accepts these; we do not. 'EST' resolves to America/Panama — a fixed
+  // -05:00 zone with no DST — so accepting it would make deadlines an hour
+  // wrong for half the year with nothing looking broken.
+  check('the abbreviation IST does not (ambiguous)', isValidTimeZone('IST'), false);
+  check('the abbreviation EST does not (resolves to America/Panama)', isValidTimeZone('EST'), false);
+  check('GMT does not', isValidTimeZone('GMT'), false);
+  check('a legacy but well-formed alias does', isValidTimeZone('US/Eastern'), true);
+  check('an empty string does not', isValidTimeZone(''), false);
+  check('untrimmed input does not', isValidTimeZone(' Asia/Kolkata '), false);
 }
 
 // ============================================================================
@@ -205,7 +272,7 @@ console.log('\n\x1b[1mFACULTY GROUPING — derived, never `status`\x1b[0m');
 // ============================================================================
 console.log('\n\x1b[1mFORM DEFAULTS — no value the professor did not type\x1b[0m');
 {
-  const d = defaultAssignmentValues(NOW);
+  const d = defaultAssignmentValues(IST, NOW);
   check('a blank form has no open date', d.opensAt, '');
   check('a blank form has no late-until', d.lateUntil, '');
   // The bug: `due.setHours(23, 59)` applied the SERVER's timezone and then
@@ -225,13 +292,14 @@ console.log('\n\x1b[1mFORM DEFAULTS — no value the professor did not type\x1b[
 
   // An assignment stored with NULL dates must produce empty inputs, because
   // the helper text promises exactly that.
-  const stored = assignmentToFormValues({
-    id: 'x',
-    title: 'Lab 4',
-    instructions: null,
-    marks: 20,
-    opensAt: null,
-    dueAt: new Date('2026-08-02T23:59:00+05:30'),
+  const stored = assignmentToFormValues(
+    {
+      id: 'x',
+      title: 'Lab 4',
+      instructions: null,
+      marks: 20,
+      opensAt: null,
+      dueAt: new Date('2026-08-02T23:59:00+05:30'),
     allowLate: true,
     lateUntil: null,
     latePenaltyPctPerDay: 0,
@@ -239,9 +307,11 @@ console.log('\n\x1b[1mFORM DEFAULTS — no value the professor did not type\x1b[
     acceptFile: true,
     acceptLink: true,
     acceptText: true,
-    status: 'open',
-    gradesReleased: false,
-  });
+      status: 'open',
+      gradesReleased: false,
+    },
+    IST,
+  );
   check('a stored NULL open date renders as an empty field', stored.opensAt, '');
   check(
     'a stored NULL late-until renders as an empty field',
@@ -252,7 +322,7 @@ console.log('\n\x1b[1mFORM DEFAULTS — no value the professor did not type\x1b[
   // Intl throws on an invalid Date; a form field is not worth a 500.
   check(
     'an unreadable date renders empty rather than crashing the page',
-    toDateTimeLocalValue(new Date('nonsense')),
+    toDateTimeLocalValue(new Date('nonsense'), IST),
     '',
   );
 }

@@ -31,7 +31,7 @@ export default async function EditAssignmentPage({
         mode="edit"
         status={assignment.status}
         offeringId={offeringId}
-        defaultValues={assignmentToFormValues(assignment)}
+        defaultValues={assignmentToFormValues(assignment, profile.timeZone)}
         onSubmit={async (intent, values) => {
           'use server';
           return updateAssignment(offeringId, assignmentId, intent, values);

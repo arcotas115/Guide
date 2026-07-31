@@ -4,6 +4,15 @@ This is the authoritative spec for the Campus app. Read it before building.
 Companion: `BUILD_RULES.md` (operating rules and stack). Where this
 spec and code disagree, this spec wins — update it if requirements change.
 
+**Revision 3 (foundations migration, `0005_foundations.sql`).** Four changes, all made
+before real grade data existed: (1) `institutions.timezone` — every timestamp the app
+renders now resolves through the institution, never through a constant; (2) audit
+columns `assignments.updated_at`/`updated_by` and `submission_grades.updated_by`;
+(3) a new append-only `grade_history` table, written by a trigger, unreadable by
+students; (4) the four leftovers from 1A — `allow_multiple_attempts`, a CHECK that an
+assignment accepts at least one submission type, and `marks > 0` so the database and zod
+finally agree. Search "Revision 3" to find each change.
+
 **Revision 2 (Milestone 1A).** Three amendments, all made before any assignment or
 grade row existed: (1) grades moved off `submissions` onto their own table so an
 unpublished grade is physically unreadable rather than merely unrendered;
@@ -272,7 +281,19 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
 `gen_random_uuid()` unless noted.
 
 ### Tenancy & people
-- **institutions**(id, name, slug unique, min_attendance_pct int default 75)
+- **institutions**(id, name, slug unique, min_attendance_pct int default 75,
+  timezone text not null default 'Asia/Kolkata')
+  — **`timezone` is config-as-data (Revision 3).** Every date the app renders resolves
+    through it; `src/lib/format.ts` takes it as a REQUIRED argument so a screen cannot
+    silently fall back to one country's time. IANA name ('Asia/Kolkata', 'Asia/Dubai').
+  — Validation is split on purpose. The DB CHECK enforces SHAPE only (`UTC` or
+    `Region/City`), because a constraint that looked the name up in `pg_timezone_names`
+    could not be IMMUTABLE and would turn a tzdata difference into a restore failure.
+    EXISTENCE is validated in zod against `Intl` — which is the database that actually
+    renders every timestamp, and a different one from Postgres's. See
+    `src/lib/timezone.ts`. Note that ICU accepts bare abbreviations and resolves them
+    badly (`EST` → `America/Panama`, a fixed −05:00 zone with no DST), so the app
+    requires the `Region/City` form too.
 - **departments**(id, institution_id, name, code) — unique(institution_id, code)
 - **profiles**(id = auth.users.id, institution_id, department_id?, role
   check in ('student','faculty','admin','placement_officer'), full_name, email,
@@ -308,9 +329,11 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
   opens_at timestamptz?, due_at timestamptz, allow_late boolean default true,
   late_until timestamptz?, late_penalty_pct_per_day numeric(5,2) not null default 0,
   hide_names_while_grading boolean not null default false,
+  allow_multiple_attempts boolean not null default true,
   accept_file boolean default true, accept_link boolean default true,
   accept_text boolean default true, is_team boolean default false,
-  team_set_id? → team_sets, created_at)
+  team_set_id? → team_sets, created_at,
+  updated_at timestamptz not null default now(), updated_by? → profiles)
   — TWO DISTINCT publish concepts, do not conflate:
     • `status` check in ('draft','open','closed') default 'draft' — the assignment's
       own lifecycle. Draft = students can't see it yet; Open = students can submit;
@@ -331,7 +354,19 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
   — `hide_names_while_grading` — anonymous grading in SpeedGrader (Milestone 1C).
     Display-only: it never alters stored data and never changes the Submissions table's
     own counts.
-  index(offering_id, due_at)
+  — **`marks > 0`** (Revision 3). Was `>= 0`; zod already rejected zero, and a zero-mark
+    assessment is meaningless. The `default 0` was dropped with it, so omitting marks now
+    fails as a missing required value rather than as a confusing CHECK violation.
+  — **`check (accept_file or accept_link or accept_text)`** (Revision 3). A professor
+    could previously uncheck all three and leave students no way to hand anything in.
+  — **`allow_multiple_attempts`** (Revision 3) — the prototype's "Allow more than one
+    attempt" toggle. Column only; the behaviour and UI are Milestone 1B's.
+  — **`updated_at` / `updated_by`** (Revision 3). The split is deliberate: `updated_at`
+    is maintained by a TRIGGER so it cannot be forgotten, and `updated_by` is set by the
+    APPLICATION. The trigger deliberately does NOT read `auth.uid()` — that would couple
+    every write in the schema to Supabase Auth, which BUILD_RULES rule 6 confines to
+    swappable edges.
+  index(offering_id, due_at), index(offering_id, status, due_at), index(updated_by)
 - **assignment_files**(id, assignment_id, storage_path, file_name) — prof-attached files.
 - **submissions** — DECIDED model (do not offer alternatives): exactly ONE submission
   row per student per assignment (or per team per assignment for team assignments).
@@ -346,7 +381,11 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
 
 - **submission_grades**(submission_id pk → submissions, grade numeric(6,2) not null,
   feedback text?, graded_by → profiles, graded_at timestamptz not null default now(),
-  updated_at timestamptz not null default now())
+  updated_at timestamptz not null default now(), updated_by? → profiles)
+  — **`graded_by` vs `updated_by`** (Revision 3). `graded_by` is who FIRST marked it;
+    `updated_by` is who LAST changed it. On a post-publish correction those are
+    frequently different people, and that difference is the whole point of having both.
+    `updated_by` is also what the grade_history trigger records as the actor.
   — **WHY THIS IS A SEPARATE TABLE. Do not fold it back into `submissions`.**
     RLS is ROW-level. It can hide a row; it cannot hide a *column* on a row the user is
     entitled to read. A student must be able to read their own `submissions` row from
@@ -365,6 +404,31 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
   — index(graded_by). The student read path joins
     submission_grades → submissions → assignments, so all three join columns must be
     indexed (see RLS notes below).
+- **grade_history**(id, institution_id, submission_id → submissions,
+  old_grade numeric(6,2)?, new_grade numeric(6,2) not null,
+  old_feedback text?, new_feedback text?, changed_by? → profiles,
+  changed_at timestamptz not null default now())
+  — **APPEND-ONLY, AND WRITTEN BY A TRIGGER** (Revision 3). Not by the application: an
+    audit log the app is trusted to write is an audit log that stops being written the
+    first time someone adds a code path and forgets — and that code path is exactly the
+    one worth auditing. The trigger on `submission_grades` fires on insert and update,
+    skips no-op updates, and takes `changed_by` from `NEW.updated_by`, so the actor is
+    recorded without the database knowing anything about the auth provider.
+  — **No role may UPDATE or DELETE**, including faculty and including admin. Enforced
+    twice: no such policy exists, and the grants are revoked (see the append-only
+    section of `0003_grants.sql`, which must not re-grant them on a re-run). There is
+    also no client INSERT policy — the trigger is SECURITY DEFINER, so granting one
+    would only let a professor forge a row.
+  — **STUDENTS CANNOT READ IT AT ALL** — not their own rows, and not after
+    `grades_released` flips. "Your grade was changed from 12 to 18" would undo the whole
+    publish flow in §3.8, which exists so a professor can revise a mark before anyone
+    sees it. Faculty who teach the offering can read it; admins can within their
+    institution.
+  — index(submission_id, changed_at desc, id desc), index(institution_id). The uuid
+    tiebreak matters: `changed_at` resolves to the millisecond, so two corrections saved
+    in the same millisecond tie and would otherwise render in a different order on
+    consecutive loads.
+
 - **submission_files**(id, submission_id, attempt int default 1, kind check in
   ('file','link','text'), storage_path?, url?, text_body?, file_name?, uploaded_at)
   — one submission can have several items in one attempt (a file + a link + text), and
@@ -423,6 +487,9 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
   makes "grade privately, release together" real rather than cosmetic, so it deserves
   its own explicit tests in `test:rls`, including the ugly path: a graded-but-
   unpublished row must be invisible to the student it belongs to.
+- **grade_history is read-only to everyone and invisible to students** (Revision 3).
+  Faculty who teach the offering and admins in the institution may SELECT; nobody may
+  INSERT, UPDATE or DELETE from a client. See the table above.
 - All policies also scope by institution_id. Index every column a policy compares
   (student_id, faculty_id via join, institution_id, offering_id, and for
   submission_grades: submissions.student_id, submissions.team_id,

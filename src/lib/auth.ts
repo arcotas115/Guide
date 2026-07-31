@@ -2,6 +2,7 @@ import { cache } from 'react';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { HOME_FOR_ROLE, isRole, type Role } from '@/lib/roles';
+import { DEFAULT_TIME_ZONE } from '@/lib/timezone';
 
 export type CurrentProfile = {
   id: string;
@@ -13,6 +14,12 @@ export type CurrentProfile = {
   institutionName: string;
   /** Config-as-data: read from the institution row, never a hardcoded 75. */
   minAttendancePct: number;
+  /**
+   * The institution's IANA timezone. Every date this app renders resolves
+   * through it — see src/lib/format.ts, where it is a required argument
+   * precisely so a screen cannot forget to ask.
+   */
+  timeZone: string;
 };
 
 /**
@@ -40,7 +47,7 @@ export const getCurrentProfile = cache(async function getCurrentProfile(): Promi
   const { data, error } = await supabase
     .from('profiles')
     .select(
-      'id, institution_id, role, full_name, email, roll_number, institutions(name, min_attendance_pct)',
+      'id, institution_id, role, full_name, email, roll_number, institutions(name, min_attendance_pct, timezone)',
     )
     .eq('id', user.id)
     .single();
@@ -63,6 +70,7 @@ export const getCurrentProfile = cache(async function getCurrentProfile(): Promi
     rollNumber: data.roll_number,
     institutionName: institution?.name ?? 'Campus',
     minAttendancePct: institution?.min_attendance_pct ?? 75,
+    timeZone: institution?.timezone ?? DEFAULT_TIME_ZONE,
   };
 });
 

@@ -120,6 +120,7 @@ export default async function FacultyAssignmentsPage({
   );
 
   const visible = all.filter((a) => matches(a, filter, now));
+  const tz = profile.timeZone;
 
   // Every chip carries its own count, computed over ALL assignments — a count
   // that changed with the active filter would be useless.
@@ -225,7 +226,7 @@ export default async function FacultyAssignmentsPage({
                             {/* Separate line, explicit separators — never
                                 `Page replacement15 marks`. */}
                             <p className="text-subtle mt-1 text-[12.5px]">
-                              {subtitle(a, now)}
+                              {subtitle(a, now, tz)}
                             </p>
                             {/*
                               The prototype renders this badge in rust. It is
@@ -247,7 +248,7 @@ export default async function FacultyAssignmentsPage({
 
                           <TableCell>
                             <StatePill tone={pillTone(a, now)}>
-                              {pillLabel(a, now)}
+                              {pillLabel(a, now, tz)}
                             </StatePill>
                           </TableCell>
 
@@ -309,12 +310,12 @@ export default async function FacultyAssignmentsPage({
   );
 }
 
-function pillLabel(a: FacultyAssignment, now: Date): string {
+function pillLabel(a: FacultyAssignment, now: Date, tz: string): string {
   const group = facultyGroupFor(a, now);
   if (group === 'draft') return 'Draft';
   if (group === 'closed') return 'Closed';
   if (group === 'scheduled') return 'Scheduled';
-  return deriveForFaculty(a, now).state === 'overdue' ? 'Past due' : 'Open';
+  return deriveForFaculty(a, now, tz).state === 'overdue' ? 'Past due' : 'Open';
 }
 
 function pillTone(
@@ -328,22 +329,22 @@ function pillTone(
 }
 
 /** The one-line summary under the title. Explicit separators throughout. */
-function subtitle(a: FacultyAssignment, now: Date): string {
+function subtitle(a: FacultyAssignment, now: Date, tz: string): string {
   const sep = ' · ';
   const marks = `${a.marks} marks`;
   const group = facultyGroupFor(a, now);
 
   if (group === 'draft') {
     return a.opensAt
-      ? `Opens ${formatDay(a.opensAt, now)}${sep}${marks}`
+      ? `Opens ${formatDay(a.opensAt, tz, now)}${sep}${marks}`
       : `Not scheduled${sep}${marks}`;
   }
   if (group === 'scheduled' && a.opensAt) {
-    return `Opens ${formatDay(a.opensAt, now)}${sep}due ${formatDay(a.dueAt, now)}${sep}${marks}`;
+    return `Opens ${formatDay(a.opensAt, tz, now)}${sep}due ${formatDay(a.dueAt, tz, now)}${sep}${marks}`;
   }
   if (group === 'closed') return `Closed${sep}${marks}`;
   if (a.allowLate && a.lateUntil && a.lateUntil > now) {
-    return `Due ${formatDay(a.dueAt, now)}${sep}late accepted till ${formatDay(a.lateUntil, now)}${sep}${marks}`;
+    return `Due ${formatDay(a.dueAt, tz, now)}${sep}late accepted till ${formatDay(a.lateUntil, tz, now)}${sep}${marks}`;
   }
-  return `Due ${formatDay(a.dueAt, now)}${sep}${marks}`;
+  return `Due ${formatDay(a.dueAt, tz, now)}${sep}${marks}`;
 }

@@ -374,7 +374,7 @@ export async function listAssignmentsForStudent(
 
   if (error || !data) return [];
   return (data as unknown as StudentAssignmentRow[]).map((row) =>
-    toStudentAssignment(row, now),
+    toStudentAssignment(row, now, profile.timeZone),
   );
 }
 
@@ -396,12 +396,17 @@ export async function getAssignmentForStudent(
     .maybeSingle();
 
   if (error || !data) return null;
-  return toStudentAssignment(data as unknown as StudentAssignmentRow, now);
+  return toStudentAssignment(
+    data as unknown as StudentAssignmentRow,
+    now,
+    profile.timeZone,
+  );
 }
 
 function toStudentAssignment(
   row: StudentAssignmentRow,
   now: Date,
+  timeZone: string,
 ): StudentAssignment {
   const base = toAssignment(row);
   const submission = row.submissions?.[0] ?? null;
@@ -419,7 +424,7 @@ function toStudentAssignment(
 
   return {
     ...base,
-    derived: deriveAssignmentState(input, now),
+    derived: deriveAssignmentState(input, now, timeZone),
     submittedAt: input.submittedAt,
     grade: grade ? Number(grade.grade) : null,
     feedback: grade?.feedback ?? null,

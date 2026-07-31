@@ -13,6 +13,7 @@ import { toDateTimeLocalValue } from '@/lib/format';
  * penalty is a decision the student-facing copy renders.
  */
 export function defaultAssignmentValues(
+  timeZone: string,
   now: Date = new Date(),
 ): AssignmentFormValues {
   // Seven days out, at 11:59 pm IN THE INSTITUTION'S TIMEZONE.
@@ -26,6 +27,7 @@ export function defaultAssignmentValues(
   // arithmetic out of the wrong zone entirely.
   const day = toDateTimeLocalValue(
     new Date(now.getTime() + 7 * 86_400_000),
+    timeZone,
   ).slice(0, 10);
 
   return {
@@ -51,15 +53,16 @@ export function defaultAssignmentValues(
  *  saving it without edits is a no-op rather than a quiet data loss. */
 export function assignmentToFormValues(
   a: FacultyAssignment,
+  timeZone: string,
 ): AssignmentFormValues {
   return {
     title: a.title,
     instructions: a.instructions ?? '',
     marks: String(a.marks),
-    opensAt: a.opensAt ? toDateTimeLocalValue(a.opensAt) : '',
-    dueAt: toDateTimeLocalValue(a.dueAt),
+    opensAt: a.opensAt ? toDateTimeLocalValue(a.opensAt, timeZone) : '',
+    dueAt: toDateTimeLocalValue(a.dueAt, timeZone),
     allowLate: a.allowLate,
-    lateUntil: a.lateUntil ? toDateTimeLocalValue(a.lateUntil) : '',
+    lateUntil: a.lateUntil ? toDateTimeLocalValue(a.lateUntil, timeZone) : '',
     latePenaltyPctPerDay: String(a.latePenaltyPctPerDay),
     hideNamesWhileGrading: a.hideNamesWhileGrading,
     acceptFile: a.acceptFile,

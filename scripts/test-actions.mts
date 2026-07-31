@@ -28,6 +28,9 @@ import { fileURLToPath } from 'node:url';
 import { prepareAssignmentWrite } from '../src/lib/assignments/prepare';
 import { assignmentFormSchema } from '../src/lib/assignments/schema';
 import { defaultAssignmentValues } from '../src/lib/assignments/defaults';
+import { DEFAULT_TIME_ZONE } from '../src/lib/timezone';
+
+const TZ = DEFAULT_TIME_ZONE;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const migration = (f: string) =>
@@ -148,7 +151,7 @@ async function asUser<T>(userId: string, fn: () => Promise<T>): Promise<T> {
  * then insert as the professor with policies live.
  */
 async function runCreate(intent: unknown, payload: unknown, actor = ids.prof) {
-  const prep = prepareAssignmentWrite(intent, payload);
+  const prep = prepareAssignmentWrite(intent, payload, TZ);
   if (!prep.ok) return { stage: 'validation' as const, state: prep.state };
 
   const { status, row } = prep.prepared;
@@ -177,7 +180,7 @@ async function runUpdate(
   payload: unknown,
   actor = ids.prof,
 ) {
-  const prep = prepareAssignmentWrite(intent, payload);
+  const prep = prepareAssignmentWrite(intent, payload, TZ);
   if (!prep.ok) return { stage: 'validation' as const, state: prep.state };
 
   const { status, row } = prep.prepared;
@@ -236,7 +239,7 @@ function expectRejected(
 // that actually crosses the wire to the server action.
 const asSubmitted = (over: Record<string, unknown> = {}) => {
   const base = assignmentFormSchema.parse({
-    ...defaultAssignmentValues(new Date('2026-07-31T12:00:00+05:30')),
+    ...defaultAssignmentValues(TZ, new Date('2026-07-31T12:00:00+05:30')),
     title: 'Lab 6 — Deadlock detection',
     instructions: 'Implement a wait-for graph and detect cycles.',
     dueAt: '2026-08-12T23:59',
@@ -483,7 +486,7 @@ expectRejected(
     { nonsense: true },
     null,
   ]) {
-    const prep = prepareAssignmentWrite('publish', payload);
+    const prep = prepareAssignmentWrite('publish', payload, TZ);
     if (prep.ok) continue;
     for (const [field, message] of Object.entries(prep.state.fieldErrors)) {
       if (suspects.some((s) => message.includes(s))) {
@@ -595,6 +598,7 @@ console.log('\n\x1b[1mBLANK DATES — null must survive the round trip\x1b[0m');
   const prep = prepareAssignmentWrite(
     'publish',
     asTyped({ allowLate: true, lateUntil: '2026-08-15T23:59' }),
+    TZ,
   );
   check(
     'a late window is kept when late work is accepted',

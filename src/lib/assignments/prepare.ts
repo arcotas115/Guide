@@ -49,6 +49,7 @@ export type PrepareResult =
 export function prepareAssignmentWrite(
   intent: unknown,
   input: unknown,
+  timeZone: string,
 ): PrepareResult {
   const parsedIntent = assignmentIntentSchema.safeParse(intent);
   if (!parsedIntent.success) {
@@ -79,7 +80,7 @@ export function prepareAssignmentWrite(
     ok: true,
     prepared: {
       status: STATUS_FOR_INTENT[parsedIntent.data],
-      row: toAssignmentRow(parsed.data),
+      row: toAssignmentRow(parsed.data, timeZone),
     },
   };
 }

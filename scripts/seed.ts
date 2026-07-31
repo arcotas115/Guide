@@ -14,6 +14,7 @@
  */
 import { config } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
+import { timeZoneSchema, DEFAULT_TIME_ZONE } from '../src/lib/timezone';
 
 config({ path: '.env.local' });
 
@@ -36,6 +37,10 @@ const INSTITUTION = {
   name: 'Meridian Institute of Technology',
   slug: 'meridian',
   min_attendance_pct: 75,
+  // Config-as-data. Every date the app renders resolves through this column,
+  // never through a constant. Validated at the door below, because the CHECK in
+  // 0005 only enforces shape — see the reasoning in src/lib/timezone.ts.
+  timezone: DEFAULT_TIME_ZONE,
 };
 
 const PASSWORD = 'campus-test-1234';
@@ -105,6 +110,15 @@ async function upsertByUnique<T extends { id: string }>(
 
 async function main() {
   console.log(`Seeding into ${url}\n`);
+
+  // Validate at the door (BUILD_RULES rule 5). A bad zone here would produce
+  // an institution whose every deadline renders wrong, and the database's shape
+  // CHECK would not catch a plausible-looking typo like 'Asia/Kolkatta'.
+  const tz = timeZoneSchema.safeParse(INSTITUTION.timezone);
+  if (!tz.success) {
+    console.error(`Bad timezone: ${tz.error.issues[0]?.message}`);
+    process.exit(1);
+  }
 
   // 1. The tenant.
   const institution = await upsertByUnique<{ id: string }>(

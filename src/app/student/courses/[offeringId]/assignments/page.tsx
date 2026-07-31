@@ -74,7 +74,7 @@ export default async function StudentAssignmentsPage({
                         <p
                           className={`mt-1 text-[13.5px] leading-snug ${STATE_STYLES[a.derived.state]}`}
                         >
-                          {rowSubtitle(a, now)}
+                          {rowSubtitle(a, now, profile.timeZone)}
                         </p>
                       </div>
 
@@ -119,14 +119,14 @@ export default async function StudentAssignmentsPage({
 }
 
 /** The derived label, with marks appended where they add something. */
-function rowSubtitle(a: StudentAssignment, now: Date): string {
+function rowSubtitle(a: StudentAssignment, now: Date, tz: string): string {
   if (a.derived.state === 'graded') {
     // Only claim feedback exists when it does — the prototype's "feedback
     // attached" line is a promise, and an empty feedback box would break it.
     return a.feedback ? 'Graded · feedback attached' : 'Graded';
   }
   if (a.derived.state === 'open') {
-    return `${a.marks} marks · due ${formatDay(a.dueAt, now)}`;
+    return `${a.marks} marks · due ${formatDay(a.dueAt, tz, now)}`;
   }
   return a.derived.label;
 }
