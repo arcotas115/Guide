@@ -5,9 +5,12 @@ import { requireRole } from '@/lib/auth';
 import {
   getOfferingForStudent,
   listAssignmentsForStudent,
+  type StudentAssignment,
 } from '@/lib/assignments/queries';
 import { CourseHeader } from '@/components/student/course-header';
+import { Card, Chevron, EmptyState } from '@/components/kit/surfaces';
 import { STATE_STYLES } from '@/lib/assignments/state';
+import { formatDay } from '@/lib/format';
 
 export const metadata: Metadata = { title: 'Assignments · Campus' };
 
@@ -27,70 +30,103 @@ export default async function StudentAssignmentsPage({
   // below: a filter in application code can be forgotten, and the point of
   // enforcing it in the database is that it cannot.
   const assignments = await listAssignmentsForStudent(profile, offeringId);
+  const now = new Date();
 
   return (
     <>
       <CourseHeader
         offering={offering}
+        variant="wash"
         title="Assignments"
         backHref={`/student/courses/${offeringId}`}
         backLabel={offering.courseTitle}
       />
 
-      <div className="mx-auto w-full max-w-md px-5 py-5">
+      <div
+        className="course-scope mx-auto w-full max-w-md px-5 py-5"
+        style={{ '--course-color': offering.courseColor } as React.CSSProperties}
+      >
         {assignments.length === 0 ? (
-          <div className="bg-surface border-hairline rounded-xl border px-5 py-12 text-center">
-            <p className="text-ink text-sm font-medium">Nothing set yet.</p>
-            <p className="text-subtle mx-auto mt-1.5 max-w-[16rem] text-xs leading-relaxed">
-              When your professor posts an assignment for this course, it shows
-              up here and in your To-Do.
-            </p>
-          </div>
+          <EmptyState
+            title="All caught up."
+            body="When your professor posts an assignment for this course, it shows up here and in your To-Do."
+          />
         ) : (
-          <ul className="divide-hairline-soft bg-surface border-hairline divide-y overflow-hidden rounded-xl border">
-            {assignments.map((a) => (
-              <li key={a.id}>
-                <Link
-                  href={`/student/courses/${offeringId}/assignments/${a.id}`}
-                  className="active:bg-hairline-soft block px-4 py-3.5 transition-colors"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-ink text-sm font-medium">{a.title}</p>
-                      {/* One line of state — the derived label, not a status
-                          word. "Due 12 Aug" beats "OPEN". */}
-                      <p
-                        className={`mt-1 text-xs ${STATE_STYLES[a.derived.state]}`}
-                      >
-                        {a.derived.state === 'graded' && a.grade !== null
-                          ? `Graded · ${a.grade} / ${a.marks}`
-                          : a.derived.label}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2 pt-0.5">
-                      {a.submittedAt ? (
-                        // The persistent ✓ (SPEC.md §3.3) — quiet, green, and
+          <Card>
+            <ul className="divide-card-border divide-y">
+              {assignments.map((a) => (
+                <li key={a.id}>
+                  <Link
+                    href={`/student/courses/${offeringId}/assignments/${a.id}`}
+                    className="active:bg-canvas block transition-colors"
+                  >
+                    <div
+                      className={`flex items-center gap-3 px-4 py-3.5 ${
+                        a.derived.state === 'upcoming' ? 'opacity-60' : ''
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-ink text-[15.5px] leading-tight font-semibold tracking-[-0.02em]">
+                          {a.title}
+                        </p>
+                        {/* One line of state — the derived label, not a status
+                            word. "Due 12 Aug" beats "OPEN". */}
+                        <p
+                          className={`mt-1 text-[13.5px] leading-snug ${STATE_STYLES[a.derived.state]}`}
+                        >
+                          {rowSubtitle(a, now)}
+                        </p>
+                      </div>
+
+                      {a.derived.state === 'graded' && a.grade !== null ? (
+                        <span
+                          className="shrink-0 rounded-lg px-2.5 py-1.5 font-mono text-[13px] font-medium"
+                          style={{
+                            background: 'var(--course-tint)',
+                            color: 'var(--course-color)',
+                          }}
+                        >
+                          {a.grade}/{a.marks}
+                        </span>
+                      ) : a.submittedAt ? (
+                        // The persistent ✓ (SPEC.md §3.3) — quiet, and present
                         // everywhere the assignment appears, so nobody has to
                         // wonder whether it went through.
                         <span
-                          className="text-moss text-sm"
+                          className="bg-moss-bg text-moss-deep flex size-7 shrink-0 items-center justify-center rounded-full text-[13px]"
                           title="Submitted"
                           aria-label="Submitted"
                         >
                           ✓
                         </span>
+                      ) : a.derived.state === 'upcoming' ? (
+                        <span className="eyebrow text-faint shrink-0">
+                          Upcoming
+                        </span>
                       ) : null}
-                      <span className="text-faint font-mono text-xs">
-                        {a.marks}
-                      </span>
+
+                      <Chevron />
                     </div>
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Card>
         )}
       </div>
     </>
   );
+}
+
+/** The derived label, with marks appended where they add something. */
+function rowSubtitle(a: StudentAssignment, now: Date): string {
+  if (a.derived.state === 'graded') {
+    // Only claim feedback exists when it does — the prototype's "feedback
+    // attached" line is a promise, and an empty feedback box would break it.
+    return a.feedback ? 'Graded · feedback attached' : 'Graded';
+  }
+  if (a.derived.state === 'open') {
+    return `${a.marks} marks · due ${formatDay(a.dueAt, now)}`;
+  }
+  return a.derived.label;
 }

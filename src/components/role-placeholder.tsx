@@ -33,7 +33,7 @@ export function RolePlaceholder({
         <SignOutButton />
       </header>
 
-      <dl className="border-hairline divide-hairline bg-surface divide-y rounded-xl border text-sm">
+      <dl className="border-card-border divide-card-border bg-card divide-y rounded-xl border text-sm">
         <Row label="Role" value={profile.role} mono />
         {profile.rollNumber ? (
           <Row label="Roll number" value={profile.rollNumber} mono />

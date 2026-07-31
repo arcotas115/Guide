@@ -1,15 +1,21 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import type { OfferingSummary } from '@/lib/assignments/queries';
+import { SidebarColumn, SidebarItem } from '@/components/kit/app-shell';
+import { ButtonLink } from '@/components/kit/button';
 
 /**
  * The course workspace sidebar (SPEC.md §3.5).
  *
  * Every section is listed, but only Assignments works this session. The rest
- * are rendered as visibly inert rather than as links that 404 — a dead link
- * reads as a bug, a greyed item reads as "not yet", and the difference is
- * whether the professor trusts the rest of the app.
+ * render dimmed rather than as links that 404 — a dead link reads as a bug, a
+ * greyed item reads as "not yet", and the difference is whether the professor
+ * trusts the rest of the app.
+ *
+ * The badge counts in the prototype (Submissions 16, Files 6, Roster 14) are
+ * deliberately absent: there is nothing yet that can count them honestly, and
+ * an invented number is worse than none.
  */
 const SECTIONS = [
   { slug: 'info', label: 'Course info' },
@@ -22,51 +28,46 @@ const SECTIONS = [
   { slug: 'roster', label: 'Roster' },
 ] as const;
 
-export function CourseSidebar({ offeringId }: { offeringId: string }) {
+export function CourseSidebar({ offering }: { offering: OfferingSummary }) {
   const pathname = usePathname();
+  const base = `/faculty/courses/${offering.offeringId}`;
 
   return (
-    <nav className="w-52 shrink-0" aria-label="Course sections">
+    <SidebarColumn
+      header={
+        <>
+          <ButtonLink href="/faculty" variant="secondary" size="sm">
+            ← All courses
+          </ButtonLink>
+          {/* Explicit stacked elements, never `CS301Operating SystemsSection A`
+              — DESIGN.md §3. */}
+          <p className="course-code mt-4">{offering.courseCode}</p>
+          <p className="row-title text-ink mt-1">{offering.courseTitle}</p>
+          <p className="text-subtle mt-1.5 text-[13px]">
+            Section {offering.section}
+            <span className="text-faint px-1.5">·</span>
+            {offering.credits} credits
+          </p>
+        </>
+      }
+    >
       <ul className="space-y-0.5">
         {SECTIONS.map((section) => {
-          const href = `/faculty/courses/${offeringId}/${section.slug}`;
-          const isActive = pathname.startsWith(href);
-
-          if (!('live' in section)) {
-            return (
-              <li key={section.slug}>
-                <span
-                  className="text-faint block cursor-default rounded-md px-3 py-2 text-sm"
-                  title="Coming in a later milestone"
-                >
-                  {section.label}
-                </span>
-              </li>
-            );
-          }
+          const href = `${base}/${section.slug}`;
+          const live = 'live' in section;
 
           return (
             <li key={section.slug}>
-              <Link
-                href={href}
-                aria-current={isActive ? 'page' : undefined}
-                className={
-                  isActive
-                    ? 'text-ink block rounded-md px-3 py-2 text-sm font-medium'
-                    : 'text-ink-muted hover:text-ink hover:bg-hairline-soft block rounded-md px-3 py-2 text-sm transition-colors'
-                }
-                style={
-                  isActive
-                    ? { background: 'var(--course-tint)' }
-                    : undefined
-                }
-              >
-                {section.label}
-              </Link>
+              <SidebarItem
+                href={live ? href : undefined}
+                label={section.label}
+                active={live && pathname.startsWith(href)}
+                muted={!live}
+              />
             </li>
           );
         })}
       </ul>
-    </nav>
+    </SidebarColumn>
   );
 }

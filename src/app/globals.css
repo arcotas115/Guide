@@ -4,229 +4,162 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ==========================================================================
+   THE PALETTE — DESIGN.md §1, §5. These five surface values and the two rust
+   values are the whole system. No screen may hardcode a hex.
+
+   The warmth is load-bearing, not taste: pure #FFFFFF and pure #000000 read as
+   clinical, which is precisely the feeling this product exists to avoid.
+   ========================================================================== */
+:root {
+  /* Surfaces */
+  --page: #f1efea;        /* outermost, behind the canvas */
+  --canvas: #fafaf8;      /* the app surface content sits on */
+  --card: #fffdf8;        /* cards and rows on the canvas — NOT white */
+  --card-border: #eae7df; /* 1px card and row borders */
+  --chevron: #c0c4bf;     /* the disclosure chevron on tappable rows */
+
+  /* Ink.
+     DESIGN.md fixes the surfaces but not the text ramp, so these are carried
+     over from the prototype unchanged. Only the top of the ramp is a rule:
+     --ink is #14171A, never #000000. */
+  --ink: #14171a;         /* primary text */
+  --ink-soft: #303531;    /* body prose */
+  --ink-muted: #55605a;   /* secondary text */
+  --subtle: #7a7e79;      /* row subtitles, hints */
+  --faint: #9a9e98;       /* metadata, disabled */
+
+  /* Rust — the attention colour. Overdue, attendance below threshold,
+     incomplete admin setup. A third use destroys the signal. */
+  --rust: #b4552b;
+  --rust-bg: #fbeee6;
+  --rust-deep: #7a3a1b;
+
+  /* Affirmation — the quiet submitted tick. */
+  --moss: #3f7a4b;
+  --moss-bg: #ebf3ec;
+  --moss-deep: #2f6b3c;
+
+  /* --- shadcn/ui contract, mapped onto the palette above ------------------
+     shadcn's primitives (Button, Input, Switch, Checkbox…) read these names.
+     Pointing them at our tokens is what stops a stock component from
+     reintroducing pure white or a stock grey. */
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card-foreground: var(--ink);
+  --popover: var(--card);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: #fafaf8;
+  --secondary: var(--canvas);
+  --secondary-foreground: var(--ink);
+  --muted: var(--canvas);
+  --muted-foreground: var(--subtle);
+  --accent: var(--canvas);
+  --accent-foreground: var(--ink);
+  --destructive: var(--rust);
+  --border: var(--card-border);
+  /* Deliberately darker than --card-border: this is the OUTLINE of an
+     interactive control, and at 32px a switch track needs to be visible
+     against a cream card, not merely present in the DOM. */
+  --input: #d5d2c8;
+  --ring: var(--subtle);
+  --radius: 0.75rem; /* DESIGN.md §3: card radius 12 */
+}
+
 @theme inline {
-  /* Meadow tokens exposed as Tailwind utilities: text-ink, bg-rust-tint,
-     border-hairline, bg-course-indigo-wash, and so on. */
-  --color-canvas: var(--canvas);
+  /* Surfaces */
   --color-page: var(--page);
-  --color-surface: var(--surface);
-  --color-surface-warm: var(--surface-warm);
+  --color-canvas: var(--canvas);
+  --color-card: var(--card);
+  --color-card-border: var(--card-border);
+  --color-chevron: var(--chevron);
+
+  /* Ink */
   --color-ink: var(--ink);
   --color-ink-soft: var(--ink-soft);
   --color-ink-muted: var(--ink-muted);
   --color-subtle: var(--subtle);
   --color-faint: var(--faint);
-  --color-hairline: var(--hairline);
-  --color-hairline-soft: var(--hairline-soft);
+
+  /* Attention + affirmation */
   --color-rust: var(--rust);
-  --color-rust-tint: var(--rust-tint);
+  --color-rust-bg: var(--rust-bg);
   --color-rust-deep: var(--rust-deep);
   --color-moss: var(--moss);
-  --color-moss-tint: var(--moss-tint);
+  --color-moss-bg: var(--moss-bg);
   --color-moss-deep: var(--moss-deep);
 
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  /* Instrument Sans + IBM Plex Mono, matching the prototype. Mono is for
-     metadata only — course codes, roll numbers, times, marks. */
+  /* Fonts — wired in layout.tsx via next/font, never a stylesheet link. */
   --font-sans: var(--font-instrument-sans);
   --font-mono: var(--font-ibm-plex-mono);
   --font-heading: var(--font-instrument-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
+
+  /* shadcn contract */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
   --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
 /* ==========================================================================
-   MEADOW PALETTE — lifted from the design prototype (Campus Prototype.dc.html)
-   so tokens, not ad-hoc hex values, drive every screen.
+   COURSE IDENTITY SCOPE — DESIGN.md §4
 
-   Two rules this palette encodes, from BUILD_RULES.md "Design language":
-     1. COLOUR IS IDENTITY. Each course owns a colour, carried across its card,
-        calendar block, to-do row, grades and tinted subsection headers. Those
-        live in --course-* below and are looked up by courses.color in the DB.
-     2. RUST IS URGENCY, AND NOTHING ELSE. --rust appears only on overdue work
-        and attendance below the institution's threshold. If you reach for it
-        for anything else, reach for --ink or --subtle instead.
-   ========================================================================== */
-:root {
-  /* Surfaces */
-  --canvas: #fafaf8;         /* app background */
-  --page: #f1efea;           /* the surround behind a device frame */
-  --surface: #ffffff;        /* cards */
-  --surface-warm: #fffdf8;   /* course cards — a touch warmer than white */
+   DESIGN.md §4 says every course carries FOUR tokens "stored in the database".
+   Only one is: `courses.color`. There are no tint/wash/washBorder columns, and
+   adding them is a schema change this session is not allowed to make — so the
+   other three are derived here with color-mix.
 
-  /* Ink */
-  --ink: #14171a;
-  --ink-soft: #303531;
-  --ink-muted: #55605a;   /* NB: not --muted; shadcn owns that as a surface */
-  --subtle: #7a7e79;
-  --faint: #9a9e98;
-  --hairline: #eae9e4;
-  --hairline-soft: #f2f1ec;
+   HOW CLOSE THAT GETS, measured rather than assumed. Against CS301 #4C5BD4:
+     tint        recorded #EEF0FD   derived  9% -> #EFF0FB
+     wash        recorded #F5F6FE   derived  5% -> #F6F7FD
+     washBorder  recorded #E6E9FA   derived 14% -> #E6E8F9
+   Within a point or two per channel, but NOT identical: the recorded values
+   are hand-picked with a slight blue bias, which no single white-mix ratio
+   reproduces. Flagged for the spec — either the three become columns, or
+   DESIGN.md records that they are derived.
 
-  /* Urgency — overdue work, attendance below threshold. Nothing else. */
-  --rust: #b4552b;
-  --rust-tint: #fbeee6;
-  --rust-deep: #7a3a1b;
+   Deriving does buy something real: an admin picking a shade the designers
+   never saw still gets a coherent card, and a new course colour stays an
+   UPDATE rather than a deploy.
 
-  /* Affirmation — the quiet submitted tick, "you're fine" attendance */
-  --moss: #3f7a4b;
-  --moss-tint: #ebf3ec;
-  --moss-deep: #2f6b3c;
-
-  /* Course identity colours: base / tint (rows, chips) / wash + wash-border
-     (the light tinted header on a course subsection screen). */
-  --course-indigo: #4c5bd4;
-  --course-indigo-tint: #eef0fd;
-  --course-indigo-wash: #f5f6fe;
-  --course-indigo-wash-border: #e6e9fa;
-
-  --course-teal: #0e7c86;
-  --course-teal-tint: #e4f2f3;
-  --course-teal-wash: #f0f8f8;
-  --course-teal-wash-border: #dcedee;
-
-  --course-amber: #a8690e;
-  --course-amber-tint: #faf0e1;
-  --course-amber-wash: #fcf7ec;
-  --course-amber-wash-border: #f2e7d4;
-
-  --course-plum: #7e4a8e;
-  --course-plum-tint: #f4edf6;
-  --course-plum-wash: #f9f4fa;
-  --course-plum-wash-border: #efe4f2;
-
-  --course-moss: #3f7a4b;
-  --course-moss-tint: #ebf3ec;
-  --course-moss-wash: #f3f8f3;
-  --course-moss-wash-border: #e2ede4;
-
-  --course-clay: #8a6a55;
-  --course-clay-tint: #f4efea;
-  --course-clay-wash: #f8f5f1;
-  --course-clay-wash-border: #ede6de;
-
-  /* --- shadcn/ui contract, mapped onto the palette above ------------------ */
-  --background: var(--canvas);
-  --foreground: var(--ink);
-  --card: var(--surface);
-  --card-foreground: var(--ink);
-  --popover: var(--surface);
-  --popover-foreground: var(--ink);
-  --primary: var(--ink);
-  --primary-foreground: var(--canvas);
-  --secondary: var(--hairline-soft);
-  --secondary-foreground: var(--ink);
-  --muted: var(--hairline-soft);
-  --muted-foreground: var(--subtle);
-  --accent: var(--hairline-soft);
-  --accent-foreground: var(--ink);
-  --destructive: var(--rust);
-  --border: var(--hairline);
-  --input: var(--hairline);
-  --ring: var(--subtle);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
-}
-
-/* ==========================================================================
-   COURSE IDENTITY SCOPE
-
-   Colour is identity: one colour per course, carried across its card, calendar
-   block, to-do row, grades and tinted section headers. The colour itself is a
-   COLUMN (courses.color) — config-as-data — so a component sets it inline:
-
-     <div className="course-scope" style={{ '--course-color': course.color }}>
-
-   The tints below are then derived from it with color-mix rather than looked up
-   in a table of six known palettes. That matters: an admin picking a colour the
-   designers never saw still gets a coherent card, and adding a course colour
-   stays an UPDATE rather than a deploy.
+   Usage: <div className="course-scope" style={{ '--course-color': hex }}>
    ========================================================================== */
 .course-scope {
-  --course-tint: color-mix(in oklab, var(--course-color) 12%, white);
-  --course-wash: color-mix(in oklab, var(--course-color) 6%, white);
-  --course-wash-border: color-mix(in oklab, var(--course-color) 18%, white);
+  --course-tint: color-mix(in srgb, var(--course-color) 9%, #ffffff);
+  --course-wash: color-mix(in srgb, var(--course-color) 5%, #ffffff);
+  --course-wash-border: color-mix(in srgb, var(--course-color) 14%, #ffffff);
+}
+
+/* The course hub header: the course colour under a sheen, so a saturated
+   indigo and a muted clay both read as the same kind of surface. */
+.course-hub-header {
+  background-color: var(--course-color);
+  background-image: linear-gradient(
+    165deg,
+    rgba(255, 255, 255, 0.12),
+    rgba(0, 0, 0, 0.14)
+  );
 }
 
 @layer base {
@@ -234,9 +167,57 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-canvas text-ink;
   }
   html {
     @apply font-sans;
+  }
+}
+
+@layer components {
+  /* ------------------------------------------------------------------------
+     TYPE SCALE — DESIGN.md §2. Named classes rather than repeated utility
+     stacks, so "row title" means one thing everywhere and changing it is one
+     edit rather than a search.
+     ------------------------------------------------------------------------ */
+
+  /* Mono metadata: course codes, column labels, small-caps eyebrows. */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.2;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+  }
+
+  /* Course name, assignment title — the primary line of any row. */
+  .row-title {
+    font-size: 17.5px;
+    line-height: 1.25;
+    font-weight: 600;
+    letter-spacing: -0.026em;
+  }
+
+  /* Screen titles: Assignments, Grades, More. */
+  .screen-title {
+    font-size: 30px;
+    line-height: 1.12;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+  }
+
+  /* Body prose. These screens are read, not scanned. */
+  .body-text {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  /* A course code, in its own colour, in mono. */
+  .course-code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    color: var(--course-color);
   }
 }

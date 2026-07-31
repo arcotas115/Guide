@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { requireRole } from '@/lib/auth';
@@ -5,8 +6,18 @@ import {
   listAssignmentsForFaculty,
   type FacultyAssignment,
 } from '@/lib/assignments/queries';
-import { formatDateTime } from '@/lib/format';
-import { buttonVariants } from '@/components/ui/button';
+import { formatDay } from '@/lib/format';
+import { ButtonLink } from '@/components/kit/button';
+import { FilterChip } from '@/components/kit/filter-chip';
+import {
+  DataTable,
+  TableGroupHeader,
+  TableRow,
+  TableCell,
+  StatePill,
+  type Column,
+} from '@/components/kit/data-table';
+import { EmptyState } from '@/components/kit/surfaces';
 
 export const metadata: Metadata = { title: 'Assignments · Campus' };
 
@@ -39,12 +50,22 @@ function matches(a: FacultyAssignment, filter: FilterKey, now: Date): boolean {
     // definition does not change.
     case 'to-grade':
       return (
-        a.status !== 'draft' && !a.gradesReleased && (a.status === 'closed' || a.dueAt < now)
+        a.status !== 'draft' &&
+        !a.gradesReleased &&
+        (a.status === 'closed' || a.dueAt < now)
       );
     default:
       return true;
   }
 }
+
+const COLUMNS: Column[] = [
+  { label: 'Assignment' },
+  { label: 'State', width: '9rem' },
+  { label: 'Submitted', width: '8rem' },
+  { label: 'Grading', width: '9rem' },
+  { label: '', width: '7rem', align: 'right' },
+];
 
 export default async function FacultyAssignmentsPage({
   params,
@@ -64,11 +85,17 @@ export default async function FacultyAssignmentsPage({
   const all = await listAssignmentsForFaculty(profile, offeringId);
   const visible = all.filter((a) => matches(a, filter, now));
 
+  // Every chip carries its own count, computed over ALL assignments — a count
+  // that changed with the active filter would be useless.
+  const counts = Object.fromEntries(
+    FILTERS.map((f) => [f.key, all.filter((a) => matches(a, f.key, now)).length]),
+  ) as Record<FilterKey, number>;
+
   // Groups follow the prototype. An assignment appears in exactly one.
   const groups = [
     {
       title: 'Waiting on you',
-      hint: 'Open to students, or past due and not yet marked.',
+      hint: 'Open to students, or past due and not yet marked',
       items: visible.filter((a) => a.status === 'open'),
     },
     {
@@ -78,123 +105,162 @@ export default async function FacultyAssignmentsPage({
     },
     {
       title: 'Drafts',
-      hint: 'Only you can see these.',
+      hint: 'Only you can see these',
       items: visible.filter((a) => a.status === 'draft'),
     },
   ].filter((g) => g.items.length > 0);
 
   return (
     <div>
-      <div className="flex items-start justify-between gap-6">
+      <div className="flex flex-wrap items-start justify-between gap-6">
         <div>
-          <h1 className="text-ink text-2xl font-semibold tracking-tight">
-            Assignments
-          </h1>
-          <p className="text-subtle mt-1 text-sm">
+          <h1 className="screen-title text-ink">Assignments</h1>
+          <p className="text-subtle mt-2 text-[14px]">
             {all.length === 0
               ? 'Nothing set yet.'
-              : `${all.length} in this course.`}
+              : `${all.length} in this course`}
           </p>
         </div>
-        <Link
+        <ButtonLink
           href={`/faculty/courses/${offeringId}/assignments/new`}
-          className={buttonVariants()}
+          size="lg"
         >
           New assignment
-        </Link>
-      </div>
-
-      <div className="mt-6 flex flex-wrap gap-2">
-        {FILTERS.map((f) => {
-          const isActive = f.key === filter;
-          return (
-            <Link
-              key={f.key}
-              href={
-                f.key === 'all'
-                  ? `/faculty/courses/${offeringId}/assignments`
-                  : `/faculty/courses/${offeringId}/assignments?filter=${f.key}`
-              }
-              aria-current={isActive ? 'true' : undefined}
-              className={
-                isActive
-                  ? 'bg-ink text-canvas rounded-full px-3.5 py-1.5 text-xs font-medium'
-                  : 'text-ink-muted border-hairline hover:border-subtle rounded-full border px-3.5 py-1.5 text-xs transition-colors'
-              }
-            >
-              {f.label}
-            </Link>
-          );
-        })}
+        </ButtonLink>
       </div>
 
       {all.length === 0 ? (
-        <EmptyState offeringId={offeringId} />
-      ) : visible.length === 0 ? (
-        <p className="text-subtle border-hairline mt-8 rounded-xl border border-dashed px-5 py-10 text-center text-sm">
-          Nothing matches that filter.
-        </p>
-      ) : (
-        <div className="mt-8 space-y-10">
-          {groups.map((group) => (
-            <section key={group.title}>
-              <div className="flex items-baseline gap-3">
-                <h2 className="text-ink-muted text-xs font-medium tracking-widest uppercase">
-                  {group.title}
-                </h2>
-                <span className="text-faint font-mono text-xs">
-                  {group.items.length}
-                </span>
-              </div>
-              {group.hint ? (
-                <p className="text-faint mt-1 text-xs">{group.hint}</p>
-              ) : null}
-
-              <table className="mt-3 w-full border-collapse text-sm">
-                <thead>
-                  <tr className="text-faint border-hairline border-b text-left text-xs font-normal">
-                    <th className="py-2 pr-4 font-normal">Assignment</th>
-                    <th className="w-40 py-2 pr-4 font-normal">State</th>
-                    <th className="w-28 py-2 pr-4 font-normal">Submitted</th>
-                    <th className="w-32 py-2 font-normal">Grading</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {group.items.map((a) => (
-                    <tr
-                      key={a.id}
-                      className="border-hairline-soft hover:bg-hairline-soft/50 border-b transition-colors"
-                    >
-                      <td className="py-3 pr-4">
-                        <Link
-                          href={`/faculty/courses/${offeringId}/assignments/${a.id}/edit`}
-                          className="text-ink font-medium hover:underline"
-                        >
-                          {a.title}
-                        </Link>
-                        <span className="text-faint ml-2 font-mono text-xs">
-                          {a.marks} marks
-                        </span>
-                      </td>
-                      <td className="text-ink-muted py-3 pr-4 text-xs">
-                        {facultyStateLabel(a, now)}
-                      </td>
-                      {/* Submissions land in 1B. An em-dash says "not yet
-                          counted"; a 0 would say "nobody has submitted", which
-                          is a different and currently unknowable claim. */}
-                      <td className="text-faint py-3 pr-4 font-mono text-xs">
-                        —
-                      </td>
-                      <td className="text-faint py-3 font-mono text-xs">
-                        {a.gradesReleased ? 'Published' : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          ))}
+        <div className="mt-8">
+          <EmptyState
+            title="No assignments in this course yet."
+            body="Set one up and it appears on your students' phones the moment you publish. Save it as a draft first if you would rather finish the wording later — drafts stay invisible to them."
+            action={
+              <ButtonLink
+                href={`/faculty/courses/${offeringId}/assignments/new`}
+              >
+                Create the first one
+              </ButtonLink>
+            }
+          />
         </div>
+      ) : (
+        <>
+          <div className="mt-7 flex flex-wrap items-center gap-2">
+            {FILTERS.map((f) => (
+              <FilterChip
+                key={f.key}
+                href={
+                  f.key === 'all'
+                    ? `/faculty/courses/${offeringId}/assignments`
+                    : `/faculty/courses/${offeringId}/assignments?filter=${f.key}`
+                }
+                label={f.label}
+                count={counts[f.key]}
+                active={f.key === filter}
+              />
+            ))}
+            <span className="text-faint ml-auto text-[12.5px]">
+              {all.length} total
+              <span className="px-1.5">·</span>
+              showing {visible.length}
+            </span>
+          </div>
+
+          <div className="mt-5">
+            {visible.length === 0 ? (
+              <EmptyState
+                title="Nothing matches that filter."
+                body="Try All to see everything in this course."
+              />
+            ) : (
+              // ONE table for every group. See data-table.tsx for why this is
+              // not one table per group.
+              <DataTable columns={COLUMNS}>
+                {groups.map((group) => (
+                  <Fragment key={group.title}>
+                    <TableGroupHeader
+                      title={group.title}
+                      hint={group.hint}
+                      count={group.items.length}
+                      span={COLUMNS.length}
+                    />
+                    {group.items.map((a) => (
+                      <TableRow key={a.id}>
+                        <TableCell>
+                          <Link
+                            href={`/faculty/courses/${offeringId}/assignments/${a.id}/edit`}
+                            className="text-ink text-[15px] font-semibold tracking-[-0.02em] hover:underline"
+                          >
+                            {a.title}
+                          </Link>
+                          {/* Separate line, explicit separators — never
+                              `Page replacement15 marks`. */}
+                          <p className="text-subtle mt-1 text-[12.5px]">
+                            {subtitle(a, now)}
+                          </p>
+                          {/*
+                            The prototype renders this badge in rust. It is not
+                            rendered in rust here, deliberately: DESIGN.md §5
+                            reserves rust for overdue work, attendance below
+                            threshold and incomplete admin setup, and a penalty
+                            rule is none of those — it is a property of an
+                            assignment that is otherwise perfectly healthy.
+                            Putting rust on it would mean most rows in a normal
+                            course carry the attention colour, which is exactly
+                            how the signal dies. Raised with the spec.
+                          */}
+                          {a.allowLate && a.latePenaltyPctPerDay > 0 ? (
+                            <span className="bg-canvas border-card-border text-ink-muted mt-2 inline-block rounded-md border px-2 py-0.5 text-[11.5px] font-medium">
+                              {a.latePenaltyPctPerDay}% a day late
+                            </span>
+                          ) : null}
+                        </TableCell>
+
+                        <TableCell>
+                          <StatePill
+                            tone={a.status === 'open' ? 'course' : a.status === 'draft' ? 'quiet' : 'neutral'}
+                          >
+                            {a.status === 'open'
+                              ? 'Open'
+                              : a.status === 'closed'
+                                ? 'Closed'
+                                : 'Draft'}
+                          </StatePill>
+                        </TableCell>
+
+                        {/* Submissions land in 1B. An em-dash says "not yet
+                            counted"; a 0 would say "nobody has submitted",
+                            which is a different and currently unknowable
+                            claim. */}
+                        <TableCell>
+                          <p className="text-faint font-mono text-[13px]">—</p>
+                          <p className="text-faint mt-1 text-[12px]">
+                            {a.status === 'draft' ? 'Not open yet' : 'submitted'}
+                          </p>
+                        </TableCell>
+
+                        <TableCell>
+                          <p className="text-faint font-mono text-[13px]">
+                            {a.gradesReleased ? 'Published' : '—'}
+                          </p>
+                        </TableCell>
+
+                        <TableCell align="right">
+                          <Link
+                            href={`/faculty/courses/${offeringId}/assignments/${a.id}/edit`}
+                            className="text-ink-muted hover:text-ink text-[13px] underline underline-offset-4 transition-colors"
+                          >
+                            {a.status === 'draft' ? 'Edit draft' : 'Edit'}
+                          </Link>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </Fragment>
+                ))}
+              </DataTable>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -202,35 +268,21 @@ export default async function FacultyAssignmentsPage({
 
 /** The professor's view of state: the assignment's own lifecycle, not a
  *  student's derived one. They are different questions about the same row. */
-function facultyStateLabel(a: FacultyAssignment, now: Date): string {
-  if (a.status === 'draft') return 'Draft';
-  if (a.status === 'closed') return 'Closed';
-  if (a.opensAt && a.opensAt > now) return `Opens ${formatDateTime(a.opensAt, now)}`;
-  if (a.dueAt < now) {
-    return a.allowLate && a.lateUntil && a.lateUntil > now
-      ? `Past due · late till ${formatDateTime(a.lateUntil, now)}`
-      : 'Past due';
-  }
-  return `Due ${formatDateTime(a.dueAt, now)}`;
-}
+function subtitle(a: FacultyAssignment, now: Date): string {
+  const marks = `${a.marks} marks`;
+  const sep = ' · ';
 
-function EmptyState({ offeringId }: { offeringId: string }) {
-  return (
-    <div className="border-hairline bg-surface mt-8 rounded-xl border px-6 py-14 text-center">
-      <p className="text-ink text-base font-medium">
-        No assignments in this course yet.
-      </p>
-      <p className="text-subtle mx-auto mt-2 max-w-sm text-sm leading-relaxed">
-        Set one up and it appears on your students&rsquo; phones the moment you
-        publish. Save it as a draft first if you would rather finish the wording
-        later — drafts stay invisible to them.
-      </p>
-      <Link
-        href={`/faculty/courses/${offeringId}/assignments/new`}
-        className={`${buttonVariants()} mt-6`}
-      >
-        Create the first one
-      </Link>
-    </div>
-  );
+  if (a.status === 'draft') {
+    return a.opensAt
+      ? `Opens ${formatDay(a.opensAt, now)}${sep}${marks}`
+      : `Not scheduled${sep}${marks}`;
+  }
+  if (a.status === 'closed') return `Closed${sep}${marks}`;
+  if (a.opensAt && a.opensAt > now) {
+    return `Opens ${formatDay(a.opensAt, now)}${sep}${marks}`;
+  }
+  if (a.allowLate && a.lateUntil && a.lateUntil > now) {
+    return `Due ${formatDay(a.dueAt, now)}${sep}late accepted till ${formatDay(a.lateUntil, now)}${sep}${marks}`;
+  }
+  return `Due ${formatDay(a.dueAt, now)}${sep}${marks}`;
 }

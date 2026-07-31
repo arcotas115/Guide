@@ -4,6 +4,7 @@ import { requireRole } from '@/lib/auth';
 import { getAssignmentForFaculty } from '@/lib/assignments/queries';
 import { AssignmentForm } from '@/components/faculty/assignment-form';
 import { CloseAssignmentButton } from '@/components/faculty/close-assignment-button';
+import { Card } from '@/components/kit/surfaces';
 import { assignmentToFormValues } from '@/lib/assignments/defaults';
 import { updateAssignment, closeAssignment } from '../../actions';
 
@@ -28,6 +29,7 @@ export default async function EditAssignmentPage({
     <>
       <AssignmentForm
         mode="edit"
+        status={assignment.status}
         offeringId={offeringId}
         defaultValues={assignmentToFormValues(assignment)}
         onSubmit={async (intent, values) => {
@@ -44,13 +46,13 @@ export default async function EditAssignmentPage({
         flip with nothing attached, so it ships.
       */}
       {assignment.status === 'open' ? (
-        <div className="border-hairline mt-10 rounded-xl border border-dashed px-5 py-4">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-ink text-sm font-medium">
+        <Card className="mt-10 px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-ink text-[14.5px] font-medium">
                 Stop accepting submissions
               </p>
-              <p className="text-subtle mt-0.5 text-xs leading-relaxed">
+              <p className="text-subtle mt-1 text-[12.5px] leading-relaxed">
                 Students keep the assignment and anything they submitted. This
                 does not publish marks — that is a separate step.
               </p>
@@ -62,7 +64,7 @@ export default async function EditAssignmentPage({
               }}
             />
           </div>
-        </div>
+        </Card>
       ) : null}
     </>
   );

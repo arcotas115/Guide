@@ -60,7 +60,7 @@ export function LoginForm({ next }: { next?: string }) {
         // screen does.
         <p
           role="alert"
-          className="bg-rust-tint text-rust-deep rounded-md px-3 py-2 text-sm"
+          className="bg-rust-bg text-rust-deep rounded-md px-3 py-2 text-sm"
         >
           {state.error}
         </p>

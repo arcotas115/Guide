@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { requireRole } from '@/lib/auth';
 import { listOfferingsForStudent } from '@/lib/assignments/queries';
 import { SignOutButton } from '@/components/sign-out-button';
+import { CourseCard } from '@/components/student/course-card';
+import { EmptyState } from '@/components/kit/surfaces';
 
 export const metadata: Metadata = { title: 'Home · Campus' };
 
@@ -27,15 +28,17 @@ export default async function StudentHome() {
     <div className="mx-auto w-full max-w-md px-5 py-8">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-ink text-2xl font-semibold tracking-tight">
-            Hello, {firstName}
-          </h1>
-          <p className="text-subtle mt-1 text-sm">
+          <h1 className="screen-title text-ink">Hello, {firstName}</h1>
+          {/* Explicit separator element between the institution and the roll
+              number — never two spans butted together. */}
+          <p className="text-subtle mt-2 text-[14px]">
             {profile.institutionName}
             {profile.rollNumber ? (
               <>
-                {' · '}
-                <span className="font-mono text-xs">{profile.rollNumber}</span>
+                <span className="text-faint px-1.5">·</span>
+                <span className="font-mono text-[12.5px]">
+                  {profile.rollNumber}
+                </span>
               </>
             ) : null}
           </p>
@@ -43,48 +46,24 @@ export default async function StudentHome() {
         <SignOutButton />
       </header>
 
-      <h2 className="text-subtle mt-9 text-xs font-medium tracking-widest uppercase">
-        Your courses
-      </h2>
+      <h2 className="eyebrow text-faint mt-9">Your courses</h2>
 
       {offerings.length === 0 ? (
-        <p className="text-subtle bg-surface border-hairline mt-3 rounded-xl border px-5 py-8 text-sm leading-relaxed">
-          You are not enrolled in anything yet. Once your department sets up the
-          term, your courses appear here.
-        </p>
+        <div className="mt-3">
+          <EmptyState
+            title="No courses yet."
+            body="Once your department sets up the term, your courses appear here."
+          />
+        </div>
       ) : (
         <ul className="mt-3 space-y-3">
           {offerings.map((o) => (
             <li key={o.offeringId}>
-              <Link
+              <CourseCard
+                offering={o}
                 href={`/student/courses/${o.offeringId}`}
-                className="course-scope bg-surface-warm border-hairline block overflow-hidden rounded-xl border active:scale-[0.995] active:transition-transform"
-                style={
-                  { '--course-color': o.courseColor } as React.CSSProperties
-                }
-              >
-                <div className="flex items-stretch">
-                  <div
-                    className="w-1.5 shrink-0"
-                    style={{ background: 'var(--course-color)' }}
-                    aria-hidden
-                  />
-                  <div className="flex-1 px-4 py-4">
-                    <p
-                      className="font-mono text-[13px] font-medium tracking-wide"
-                      style={{ color: 'var(--course-color)' }}
-                    >
-                      {o.courseCode}
-                    </p>
-                    <p className="text-ink mt-0.5 text-base font-medium">
-                      {o.courseTitle}
-                    </p>
-                    <p className="text-subtle mt-1 text-xs">
-                      Section {o.section} · {o.credits} credits
-                    </p>
-                  </div>
-                </div>
-              </Link>
+                subtitle={`Section ${o.section} · ${o.credits} credits`}
+              />
             </li>
           ))}
         </ul>
