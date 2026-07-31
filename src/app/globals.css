@@ -5,11 +5,33 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* Meadow tokens exposed as Tailwind utilities: text-ink, bg-rust-tint,
+     border-hairline, bg-course-indigo-wash, and so on. */
+  --color-canvas: var(--canvas);
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-warm: var(--surface-warm);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-muted: var(--ink-muted);
+  --color-subtle: var(--subtle);
+  --color-faint: var(--faint);
+  --color-hairline: var(--hairline);
+  --color-hairline-soft: var(--hairline-soft);
+  --color-rust: var(--rust);
+  --color-rust-tint: var(--rust-tint);
+  --color-rust-deep: var(--rust-deep);
+  --color-moss: var(--moss);
+  --color-moss-tint: var(--moss-tint);
+  --color-moss-deep: var(--moss-deep);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  /* Instrument Sans + IBM Plex Mono, matching the prototype. Mono is for
+     metadata only — course codes, roll numbers, times, marks. */
+  --font-sans: var(--font-instrument-sans);
+  --font-mono: var(--font-ibm-plex-mono);
+  --font-heading: var(--font-instrument-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -48,25 +70,95 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ==========================================================================
+   MEADOW PALETTE — lifted from the design prototype (Campus Prototype.dc.html)
+   so tokens, not ad-hoc hex values, drive every screen.
+
+   Two rules this palette encodes, from BUILD_RULES.md "Design language":
+     1. COLOUR IS IDENTITY. Each course owns a colour, carried across its card,
+        calendar block, to-do row, grades and tinted subsection headers. Those
+        live in --course-* below and are looked up by courses.color in the DB.
+     2. RUST IS URGENCY, AND NOTHING ELSE. --rust appears only on overdue work
+        and attendance below the institution's threshold. If you reach for it
+        for anything else, reach for --ink or --subtle instead.
+   ========================================================================== */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /* Surfaces */
+  --canvas: #fafaf8;         /* app background */
+  --page: #f1efea;           /* the surround behind a device frame */
+  --surface: #ffffff;        /* cards */
+  --surface-warm: #fffdf8;   /* course cards — a touch warmer than white */
+
+  /* Ink */
+  --ink: #14171a;
+  --ink-soft: #303531;
+  --ink-muted: #55605a;   /* NB: not --muted; shadcn owns that as a surface */
+  --subtle: #7a7e79;
+  --faint: #9a9e98;
+  --hairline: #eae9e4;
+  --hairline-soft: #f2f1ec;
+
+  /* Urgency — overdue work, attendance below threshold. Nothing else. */
+  --rust: #b4552b;
+  --rust-tint: #fbeee6;
+  --rust-deep: #7a3a1b;
+
+  /* Affirmation — the quiet submitted tick, "you're fine" attendance */
+  --moss: #3f7a4b;
+  --moss-tint: #ebf3ec;
+  --moss-deep: #2f6b3c;
+
+  /* Course identity colours: base / tint (rows, chips) / wash + wash-border
+     (the light tinted header on a course subsection screen). */
+  --course-indigo: #4c5bd4;
+  --course-indigo-tint: #eef0fd;
+  --course-indigo-wash: #f5f6fe;
+  --course-indigo-wash-border: #e6e9fa;
+
+  --course-teal: #0e7c86;
+  --course-teal-tint: #e4f2f3;
+  --course-teal-wash: #f0f8f8;
+  --course-teal-wash-border: #dcedee;
+
+  --course-amber: #a8690e;
+  --course-amber-tint: #faf0e1;
+  --course-amber-wash: #fcf7ec;
+  --course-amber-wash-border: #f2e7d4;
+
+  --course-plum: #7e4a8e;
+  --course-plum-tint: #f4edf6;
+  --course-plum-wash: #f9f4fa;
+  --course-plum-wash-border: #efe4f2;
+
+  --course-moss: #3f7a4b;
+  --course-moss-tint: #ebf3ec;
+  --course-moss-wash: #f3f8f3;
+  --course-moss-wash-border: #e2ede4;
+
+  --course-clay: #8a6a55;
+  --course-clay-tint: #f4efea;
+  --course-clay-wash: #f8f5f1;
+  --course-clay-wash-border: #ede6de;
+
+  /* --- shadcn/ui contract, mapped onto the palette above ------------------ */
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--canvas);
+  --secondary: var(--hairline-soft);
+  --secondary-foreground: var(--ink);
+  --muted: var(--hairline-soft);
+  --muted-foreground: var(--subtle);
+  --accent: var(--hairline-soft);
+  --accent-foreground: var(--ink);
+  --destructive: var(--rust);
+  --border: var(--hairline);
+  --input: var(--hairline);
+  --ring: var(--subtle);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
