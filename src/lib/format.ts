@@ -56,6 +56,10 @@ export function formatDateTime(date: Date, now: Date = new Date()): string {
  * different time from the one students see, and saving would move the deadline.
  */
 export function toDateTimeLocalValue(date: Date): string {
+  // Intl throws RangeError on an invalid Date. A form field is not worth a 500,
+  // and an empty input is the honest rendering of a value we cannot read.
+  if (Number.isNaN(date.getTime())) return '';
+
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: ZONE,
     year: 'numeric',

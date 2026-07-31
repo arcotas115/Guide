@@ -10,13 +10,22 @@
  * is a claim about a function; checking it by looking at a screen tests the
  * screen and the function at once, and tells you nothing useful when it fails.
  */
-import { deriveAssignmentState, type AssignmentStateInput } from '../src/lib/assignments/state';
+import {
+  deriveAssignmentState,
+  facultyGroupFor,
+  type AssignmentStateInput,
+  type FacultyAssignmentLike,
+} from '../src/lib/assignments/state';
 import { assignmentFormSchema } from '../src/lib/assignments/schema';
 import {
   fromDateTimeLocalValue,
   toDateTimeLocalValue,
   formatDay,
 } from '../src/lib/format';
+import {
+  defaultAssignmentValues,
+  assignmentToFormValues,
+} from '../src/lib/assignments/defaults';
 
 let passed = 0;
 let failed = 0;
@@ -151,6 +160,101 @@ console.log('\n\x1b[1mTIMEZONE — deadlines must not move\x1b[0m');
   check('midnight round-trips (the 24 vs 00 trap)', toDateTimeLocalValue(fromDateTimeLocalValue('2026-08-12T00:00')!), '2026-08-12T00:00');
   check('a deadline late on the 12th IST still reads "12 Aug"', formatDay(d!, NOW), '12 Aug');
   check('garbage is rejected rather than becoming Invalid Date', fromDateTimeLocalValue('not a date'), null);
+}
+
+// ============================================================================
+console.log('\n\x1b[1mFACULTY GROUPING — derived, never `status`\x1b[0m');
+{
+  const base: FacultyAssignmentLike = {
+    status: 'open',
+    opensAt: days(-4),
+    dueAt: days(6),
+    allowLate: false,
+    lateUntil: null,
+  };
+  const at = (patch: Partial<FacultyAssignmentLike>) =>
+    facultyGroupFor({ ...base, ...patch }, NOW);
+
+  // The reported bug: published on 31 Jul, opening 10 Aug, filed under
+  // "Waiting on you — open to students, or past due". It was neither.
+  check(
+    'published but not yet open is Scheduled, not Waiting on you',
+    at({ opensAt: days(10) }),
+    'scheduled',
+  );
+  check('open right now is Waiting on you', at({}), 'waiting');
+  check(
+    'past due and unmarked is still Waiting on you',
+    at({ dueAt: days(-2) }),
+    'waiting',
+  );
+  check('a draft is Drafts', at({ status: 'draft' }), 'draft');
+  check(
+    'a draft that would otherwise be scheduled is still Drafts',
+    at({ status: 'draft', opensAt: days(10) }),
+    'draft',
+  );
+  check('closed is Closed', at({ status: 'closed' }), 'closed');
+  check(
+    'an assignment with no open date is live immediately',
+    at({ opensAt: null }),
+    'waiting',
+  );
+}
+
+// ============================================================================
+console.log('\n\x1b[1mFORM DEFAULTS — no value the professor did not type\x1b[0m');
+{
+  const d = defaultAssignmentValues(NOW);
+  check('a blank form has no open date', d.opensAt, '');
+  check('a blank form has no late-until', d.lateUntil, '');
+  // The bug: `due.setHours(23, 59)` applied the SERVER's timezone and then
+  // rendered in IST, so this read 09:29 on one machine and something else on
+  // another. The default must be 11:59 pm in the institution's zone, wherever
+  // the server happens to be.
+  check(
+    'the default due time is 11:59 pm in IST, not the server zone',
+    String(d.dueAt).slice(-6),
+    'T23:59',
+  );
+  check(
+    'the default due date is seven days out',
+    String(d.dueAt).slice(0, 10),
+    '2026-08-07',
+  );
+
+  // An assignment stored with NULL dates must produce empty inputs, because
+  // the helper text promises exactly that.
+  const stored = assignmentToFormValues({
+    id: 'x',
+    title: 'Lab 4',
+    instructions: null,
+    marks: 20,
+    opensAt: null,
+    dueAt: new Date('2026-08-02T23:59:00+05:30'),
+    allowLate: true,
+    lateUntil: null,
+    latePenaltyPctPerDay: 0,
+    hideNamesWhileGrading: false,
+    acceptFile: true,
+    acceptLink: true,
+    acceptText: true,
+    status: 'open',
+    gradesReleased: false,
+  });
+  check('a stored NULL open date renders as an empty field', stored.opensAt, '');
+  check(
+    'a stored NULL late-until renders as an empty field',
+    stored.lateUntil,
+    '',
+  );
+
+  // Intl throws on an invalid Date; a form field is not worth a 500.
+  check(
+    'an unreadable date renders empty rather than crashing the page',
+    toDateTimeLocalValue(new Date('nonsense')),
+    '',
+  );
 }
 
 // ============================================================================

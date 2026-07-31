@@ -2,10 +2,11 @@
 
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
-import { useForm, useWatch, Controller } from 'react-hook-form';
+import { useForm, useWatch, Controller, type Control } from 'react-hook-form';
 import { standardSchemaResolver } from '@hookform/resolvers/standard-schema';
 import {
   assignmentFormSchema,
+  toBoolean,
   type AssignmentFormValues,
   type AssignmentIntent,
 } from '@/lib/assignments/schema';
@@ -66,11 +67,14 @@ export function AssignmentForm({
   // useWatch, not watch(): watch() returns a fresh function each render, which
   // the React Compiler cannot memoize safely, so it bails out of optimising the
   // whole component. useWatch subscribes to just these fields.
-  const allowLate = useWatch({ control, name: 'allowLate' });
+  // These read the form's INPUT shape, where a toggle may legitimately be a
+  // boolean, "on", or 1 — so they go through the same coercion the schema uses
+  // rather than a bare truthiness test, under which the string "false" is true.
+  const allowLate = toBoolean(useWatch({ control, name: 'allowLate' }), true);
   const penalty = useWatch({ control, name: 'latePenaltyPctPerDay' });
-  const acceptFile = useWatch({ control, name: 'acceptFile' });
-  const acceptLink = useWatch({ control, name: 'acceptLink' });
-  const acceptText = useWatch({ control, name: 'acceptText' });
+  const acceptFile = toBoolean(useWatch({ control, name: 'acceptFile' }), true);
+  const acceptLink = toBoolean(useWatch({ control, name: 'acceptLink' }), true);
+  const acceptText = toBoolean(useWatch({ control, name: 'acceptText' }), true);
 
   const nothingToSubmit = !acceptFile && !acceptLink && !acceptText;
 
@@ -133,7 +137,7 @@ export function AssignmentForm({
         </p>
       ) : null}
 
-      <div className="mt-8 grid items-start gap-8 xl:grid-cols-[minmax(0,1fr)_24rem]">
+      <div className="mt-8 grid items-start gap-8 xl:grid-cols-[minmax(0,1fr)_26rem]">
         {/* ---------------- Left: what the work actually is ---------------- */}
         <Card className="space-y-6 p-6">
           <Field label="Title" error={errors.title?.message} htmlFor="title">
@@ -190,38 +194,27 @@ export function AssignmentForm({
                 />
               </Field>
 
-              <Field
+              <DateField
+                control={control}
+                name="opensAt"
                 label="Opens"
                 error={errors.opensAt?.message}
-                htmlFor="opensAt"
-              >
-                <TextInput
-                  id="opensAt"
-                  type="datetime-local"
-                  {...register('opensAt')}
-                />
-              </Field>
+              />
 
-              <Field label="Due" error={errors.dueAt?.message} htmlFor="dueAt">
-                <TextInput
-                  id="dueAt"
-                  type="datetime-local"
-                  {...register('dueAt')}
-                />
-              </Field>
+              <DateField
+                control={control}
+                name="dueAt"
+                label="Due"
+                error={errors.dueAt?.message}
+              />
 
-              <Field
+              <DateField
+                control={control}
+                name="lateUntil"
                 label="Late until"
                 error={errors.lateUntil?.message}
-                htmlFor="lateUntil"
-              >
-                <TextInput
-                  id="lateUntil"
-                  type="datetime-local"
-                  disabled={!allowLate}
-                  {...register('lateUntil')}
-                />
-              </Field>
+                disabled={!allowLate}
+              />
             </div>
             <p className="text-subtle text-[12.5px] leading-relaxed">
               Leave <span className="text-ink-muted">Opens</span> blank to make
@@ -241,7 +234,7 @@ export function AssignmentForm({
                   id="allowLate"
                   label="Accept late submissions"
                   hint="Students see “accepted till” on the assignment."
-                  checked={field.value ?? false}
+                  checked={toBoolean(field.value, false)}
                   onChange={(v) => {
                     field.onChange(v);
                     // Clearing the date on the way off keeps the form from
@@ -260,7 +253,7 @@ export function AssignmentForm({
                   id="hideNamesWhileGrading"
                   label="Hide names while grading"
                   hint="You see roll numbers only until you save a mark."
-                  checked={field.value ?? false}
+                  checked={toBoolean(field.value, false)}
                   onChange={field.onChange}
                 />
               )}
@@ -282,6 +275,7 @@ export function AssignmentForm({
                     label={p.label}
                     pressed={String(penalty) === p.value}
                     disabled={!allowLate}
+                    size="compact"
                     onChange={() => setValue('latePenaltyPctPerDay', p.value)}
                   />
                 ))}
@@ -315,7 +309,7 @@ export function AssignmentForm({
                   render={({ field }) => (
                     <PillToggle
                       label="Files"
-                      pressed={field.value ?? false}
+                      pressed={toBoolean(field.value, false)}
                       onChange={field.onChange}
                     />
                   )}
@@ -326,7 +320,7 @@ export function AssignmentForm({
                   render={({ field }) => (
                     <PillToggle
                       label="A link"
-                      pressed={field.value ?? false}
+                      pressed={toBoolean(field.value, false)}
                       onChange={field.onChange}
                     />
                   )}
@@ -337,7 +331,7 @@ export function AssignmentForm({
                   render={({ field }) => (
                     <PillToggle
                       label="Typed text"
-                      pressed={field.value ?? false}
+                      pressed={toBoolean(field.value, false)}
                       onChange={field.onChange}
                     />
                   )}
@@ -386,5 +380,52 @@ export function AssignmentForm({
         </div>
       </div>
     </form>
+  );
+}
+
+/**
+ * A datetime-local input bound explicitly to form state.
+ *
+ * CONTROLLED ON PURPOSE. `register` leaves the input uncontrolled, so whatever
+ * the browser decides to put in a `datetime-local` is what the professor sees —
+ * and an empty optional date must render EMPTY, because the helper text
+ * promises exactly that ("Leave Opens blank to make it available immediately").
+ * Binding `value` to the form state makes "the field is blank" and "the stored
+ * value is null" the same thing by construction rather than by hope.
+ */
+function DateField({
+  control,
+  name,
+  label,
+  error,
+  disabled = false,
+}: {
+  control: Control<AssignmentFormValues>;
+  name: 'opensAt' | 'dueAt' | 'lateUntil';
+  label: string;
+  error?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <Controller
+      control={control}
+      name={name}
+      render={({ field }) => (
+        <Field label={label} error={error} htmlFor={name}>
+          <TextInput
+            id={name}
+            type="datetime-local"
+            disabled={disabled}
+            name={field.name}
+            ref={field.ref}
+            onBlur={field.onBlur}
+            // `?? ''` is the whole point: undefined would hand the input back
+            // to the browser and make React stop controlling it.
+            value={typeof field.value === 'string' ? field.value : ''}
+            onChange={(e) => field.onChange(e.target.value)}
+          />
+        </Field>
+      )}
+    />
   );
 }

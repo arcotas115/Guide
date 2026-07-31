@@ -221,6 +221,59 @@ export async function listAssignmentsForFaculty(
   return (data as unknown as AssignmentRow[]).map(toAssignment);
 }
 
+/**
+ * How many submissions each assignment in this offering has, and how many
+ * students are enrolled — the numerator and denominator of "12 / 14".
+ *
+ * WHY THIS COUNTS IN JAVASCRIPT rather than with a Postgres aggregate: the
+ * embedded-aggregate syntax (`submissions(count)`) depends on the PostgREST
+ * version the project happens to be running, and a silent shape change there
+ * would put a wrong number in front of a professor. Fetching the id column and
+ * counting is version-proof, and the volume is one row per submission in one
+ * course — a few hundred at most, over an indexed column.
+ *
+ * If a course ever gets large enough for that to matter, this becomes an RPC
+ * with a GROUP BY; the call site does not change.
+ *
+ * RLS does the scoping: a professor sees submissions only for offerings they
+ * teach, so this cannot count another course's work even if the id list were
+ * wrong.
+ */
+export async function getSubmissionCounts(
+  profile: CurrentProfile,
+  offeringId: string,
+  assignmentIds: string[],
+): Promise<{ byAssignment: Map<string, number>; enrolled: number }> {
+  const supabase = await createClient();
+
+  const [subs, enrolled] = await Promise.all([
+    assignmentIds.length === 0
+      ? Promise.resolve({ data: [], error: null })
+      : supabase
+          .from('submissions')
+          .select('assignment_id')
+          .eq('institution_id', profile.institutionId)
+          .in('assignment_id', assignmentIds),
+    supabase
+      .from('enrolments')
+      .select('student_id', { count: 'exact', head: true })
+      .eq('institution_id', profile.institutionId)
+      .eq('offering_id', offeringId),
+  ]);
+
+  const byAssignment = new Map<string, number>();
+  if (!subs.error && subs.data) {
+    for (const row of subs.data as Array<{ assignment_id: string }>) {
+      byAssignment.set(
+        row.assignment_id,
+        (byAssignment.get(row.assignment_id) ?? 0) + 1,
+      );
+    }
+  }
+
+  return { byAssignment, enrolled: enrolled.count ?? 0 };
+}
+
 export async function getAssignmentForFaculty(
   profile: CurrentProfile,
   offeringId: string,

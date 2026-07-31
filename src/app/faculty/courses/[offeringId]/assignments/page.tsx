@@ -4,8 +4,14 @@ import Link from 'next/link';
 import { requireRole } from '@/lib/auth';
 import {
   listAssignmentsForFaculty,
+  getSubmissionCounts,
   type FacultyAssignment,
 } from '@/lib/assignments/queries';
+import {
+  deriveForFaculty,
+  facultyGroupFor,
+  type FacultyGroup,
+} from '@/lib/assignments/state';
 import { formatDay } from '@/lib/format';
 import { ButtonLink } from '@/components/kit/button';
 import { FilterChip } from '@/components/kit/filter-chip';
@@ -24,6 +30,10 @@ export const metadata: Metadata = { title: 'Assignments · Campus' };
 /**
  * The workspace lands here — there is no overview dashboard (SPEC.md §3.5).
  *
+ * Grouping and filtering both run off `facultyGroupFor`, which derives state
+ * through the same function the student side uses. Nothing here reads `status`
+ * to decide where a row belongs.
+ *
  * The filter lives in the URL rather than in client state. It costs nothing, it
  * survives a refresh, and a professor can send "look at the drafts" as a link.
  */
@@ -31,6 +41,7 @@ const FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'to-grade', label: 'To grade' },
   { key: 'open', label: 'Open' },
+  { key: 'scheduled', label: 'Scheduled' },
   { key: 'closed', label: 'Closed' },
   { key: 'drafts', label: 'Drafts' },
 ] as const;
@@ -38,33 +49,52 @@ const FILTERS = [
 type FilterKey = (typeof FILTERS)[number]['key'];
 
 function matches(a: FacultyAssignment, filter: FilterKey, now: Date): boolean {
+  const group = facultyGroupFor(a, now);
+
   switch (filter) {
     case 'open':
-      return a.status === 'open';
+      return group === 'waiting';
+    case 'scheduled':
+      return group === 'scheduled';
     case 'closed':
-      return a.status === 'closed';
+      return group === 'closed';
     case 'drafts':
-      return a.status === 'draft';
-    // "To grade" is anything students can no longer add to but whose marks have
-    // not gone out. Once submissions exist (1B) this gains a count; the
-    // definition does not change.
+      return group === 'draft';
+    // Anything students can no longer add to, whose marks have not gone out.
     case 'to-grade':
       return (
-        a.status !== 'draft' &&
+        group !== 'draft' &&
+        group !== 'scheduled' &&
         !a.gradesReleased &&
-        (a.status === 'closed' || a.dueAt < now)
+        (group === 'closed' || a.dueAt < now)
       );
     default:
       return true;
   }
 }
 
+const GROUPS: Array<{ key: FacultyGroup; title: string; hint: string | null }> =
+  [
+    {
+      key: 'waiting',
+      title: 'Waiting on you',
+      hint: 'Open to students, or past due and not yet marked',
+    },
+    {
+      key: 'scheduled',
+      title: 'Scheduled',
+      hint: 'Published, but not open to students yet',
+    },
+    { key: 'closed', title: 'Closed and marked', hint: null },
+    { key: 'draft', title: 'Drafts', hint: 'Only you can see these' },
+  ];
+
 const COLUMNS: Column[] = [
   { label: 'Assignment' },
   { label: 'State', width: '9rem' },
   { label: 'Submitted', width: '8rem' },
   { label: 'Grading', width: '9rem' },
-  { label: '', width: '7rem', align: 'right' },
+  { label: '', width: '6rem', align: 'right' },
 ];
 
 export default async function FacultyAssignmentsPage({
@@ -83,32 +113,27 @@ export default async function FacultyAssignmentsPage({
 
   const now = new Date();
   const all = await listAssignmentsForFaculty(profile, offeringId);
+  const { byAssignment, enrolled } = await getSubmissionCounts(
+    profile,
+    offeringId,
+    all.map((a) => a.id),
+  );
+
   const visible = all.filter((a) => matches(a, filter, now));
 
   // Every chip carries its own count, computed over ALL assignments — a count
   // that changed with the active filter would be useless.
   const counts = Object.fromEntries(
-    FILTERS.map((f) => [f.key, all.filter((a) => matches(a, f.key, now)).length]),
+    FILTERS.map((f) => [
+      f.key,
+      all.filter((a) => matches(a, f.key, now)).length,
+    ]),
   ) as Record<FilterKey, number>;
 
-  // Groups follow the prototype. An assignment appears in exactly one.
-  const groups = [
-    {
-      title: 'Waiting on you',
-      hint: 'Open to students, or past due and not yet marked',
-      items: visible.filter((a) => a.status === 'open'),
-    },
-    {
-      title: 'Closed and marked',
-      hint: null,
-      items: visible.filter((a) => a.status === 'closed'),
-    },
-    {
-      title: 'Drafts',
-      hint: 'Only you can see these',
-      items: visible.filter((a) => a.status === 'draft'),
-    },
-  ].filter((g) => g.items.length > 0);
+  const groups = GROUPS.map((g) => ({
+    ...g,
+    items: visible.filter((a) => facultyGroupFor(a, now) === g.key),
+  })).filter((g) => g.items.length > 0);
 
   return (
     <div>
@@ -177,84 +202,102 @@ export default async function FacultyAssignmentsPage({
               // not one table per group.
               <DataTable columns={COLUMNS}>
                 {groups.map((group) => (
-                  <Fragment key={group.title}>
+                  <Fragment key={group.key}>
                     <TableGroupHeader
                       title={group.title}
                       hint={group.hint}
                       count={group.items.length}
                       span={COLUMNS.length}
                     />
-                    {group.items.map((a) => (
-                      <TableRow key={a.id}>
-                        <TableCell>
-                          <Link
-                            href={`/faculty/courses/${offeringId}/assignments/${a.id}/edit`}
-                            className="text-ink text-[15px] font-semibold tracking-[-0.02em] hover:underline"
-                          >
-                            {a.title}
-                          </Link>
-                          {/* Separate line, explicit separators — never
-                              `Page replacement15 marks`. */}
-                          <p className="text-subtle mt-1 text-[12.5px]">
-                            {subtitle(a, now)}
-                          </p>
+                    {group.items.map((a) => {
+                      const submitted = byAssignment.get(a.id) ?? 0;
+                      const notOpenYet = facultyGroupFor(a, now) !== 'waiting';
+
+                      return (
+                        <TableRow key={a.id}>
+                          <TableCell>
+                            <Link
+                              href={`/faculty/courses/${offeringId}/assignments/${a.id}/edit`}
+                              className="text-ink text-[15px] font-semibold tracking-[-0.02em] hover:underline"
+                            >
+                              {a.title}
+                            </Link>
+                            {/* Separate line, explicit separators — never
+                                `Page replacement15 marks`. */}
+                            <p className="text-subtle mt-1 text-[12.5px]">
+                              {subtitle(a, now)}
+                            </p>
+                            {/*
+                              The prototype renders this badge in rust. It is
+                              not rendered in rust here, deliberately:
+                              DESIGN.md §5 reserves rust for overdue work,
+                              attendance below threshold and incomplete admin
+                              setup, and a penalty rule is none of those — it
+                              is a property of an assignment that is otherwise
+                              perfectly healthy. Putting rust on it would mean
+                              most rows in a normal course carry the attention
+                              colour, which is how the signal dies.
+                            */}
+                            {a.allowLate && a.latePenaltyPctPerDay > 0 ? (
+                              <span className="bg-canvas border-card-border text-ink-muted mt-2 inline-block rounded-md border px-2 py-0.5 text-[11.5px] font-medium">
+                                {a.latePenaltyPctPerDay}% a day late
+                              </span>
+                            ) : null}
+                          </TableCell>
+
+                          <TableCell>
+                            <StatePill tone={pillTone(a, now)}>
+                              {pillLabel(a, now)}
+                            </StatePill>
+                          </TableCell>
+
                           {/*
-                            The prototype renders this badge in rust. It is not
-                            rendered in rust here, deliberately: DESIGN.md §5
-                            reserves rust for overdue work, attendance below
-                            threshold and incomplete admin setup, and a penalty
-                            rule is none of those — it is a property of an
-                            assignment that is otherwise perfectly healthy.
-                            Putting rust on it would mean most rows in a normal
-                            course carry the attention colour, which is exactly
-                            how the signal dies. Raised with the spec.
+                            A real count now that submissions exist. The
+                            em-dash survives only where a count genuinely
+                            cannot be known — nothing can have been submitted
+                            to an assignment students cannot open yet.
                           */}
-                          {a.allowLate && a.latePenaltyPctPerDay > 0 ? (
-                            <span className="bg-canvas border-card-border text-ink-muted mt-2 inline-block rounded-md border px-2 py-0.5 text-[11.5px] font-medium">
-                              {a.latePenaltyPctPerDay}% a day late
-                            </span>
-                          ) : null}
-                        </TableCell>
+                          <TableCell>
+                            {notOpenYet ? (
+                              <>
+                                <p className="text-faint font-mono text-[13px]">
+                                  —
+                                </p>
+                                <p className="text-faint mt-1 text-[12px]">
+                                  Not open yet
+                                </p>
+                              </>
+                            ) : (
+                              <>
+                                <p className="text-ink font-mono text-[13px] tabular-nums">
+                                  {submitted}
+                                  <span className="text-faint px-1">/</span>
+                                  {enrolled}
+                                </p>
+                                <p className="text-faint mt-1 text-[12px]">
+                                  submitted
+                                </p>
+                              </>
+                            )}
+                          </TableCell>
 
-                        <TableCell>
-                          <StatePill
-                            tone={a.status === 'open' ? 'course' : a.status === 'draft' ? 'quiet' : 'neutral'}
-                          >
-                            {a.status === 'open'
-                              ? 'Open'
-                              : a.status === 'closed'
-                                ? 'Closed'
-                                : 'Draft'}
-                          </StatePill>
-                        </TableCell>
+                          <TableCell>
+                            <p className="text-faint font-mono text-[13px]">
+                              {a.gradesReleased ? 'Published' : '—'}
+                            </p>
+                          </TableCell>
 
-                        {/* Submissions land in 1B. An em-dash says "not yet
-                            counted"; a 0 would say "nobody has submitted",
-                            which is a different and currently unknowable
-                            claim. */}
-                        <TableCell>
-                          <p className="text-faint font-mono text-[13px]">—</p>
-                          <p className="text-faint mt-1 text-[12px]">
-                            {a.status === 'draft' ? 'Not open yet' : 'submitted'}
-                          </p>
-                        </TableCell>
-
-                        <TableCell>
-                          <p className="text-faint font-mono text-[13px]">
-                            {a.gradesReleased ? 'Published' : '—'}
-                          </p>
-                        </TableCell>
-
-                        <TableCell align="right">
-                          <Link
-                            href={`/faculty/courses/${offeringId}/assignments/${a.id}/edit`}
-                            className="text-ink-muted hover:text-ink text-[13px] underline underline-offset-4 transition-colors"
-                          >
-                            {a.status === 'draft' ? 'Edit draft' : 'Edit'}
-                          </Link>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          <TableCell align="right">
+                            <Link
+                              href={`/faculty/courses/${offeringId}/assignments/${a.id}/edit`}
+                              className="text-ink-muted hover:text-ink text-[13px] underline underline-offset-4 transition-colors"
+                            >
+                              {a.status === 'draft' ? 'Edit draft' : 'Edit'}
+                            </Link>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </Fragment>
                 ))}
               </DataTable>
@@ -266,21 +309,39 @@ export default async function FacultyAssignmentsPage({
   );
 }
 
-/** The professor's view of state: the assignment's own lifecycle, not a
- *  student's derived one. They are different questions about the same row. */
-function subtitle(a: FacultyAssignment, now: Date): string {
-  const marks = `${a.marks} marks`;
-  const sep = ' · ';
+function pillLabel(a: FacultyAssignment, now: Date): string {
+  const group = facultyGroupFor(a, now);
+  if (group === 'draft') return 'Draft';
+  if (group === 'closed') return 'Closed';
+  if (group === 'scheduled') return 'Scheduled';
+  return deriveForFaculty(a, now).state === 'overdue' ? 'Past due' : 'Open';
+}
 
-  if (a.status === 'draft') {
+function pillTone(
+  a: FacultyAssignment,
+  now: Date,
+): 'neutral' | 'course' | 'quiet' {
+  const group = facultyGroupFor(a, now);
+  if (group === 'draft' || group === 'scheduled') return 'quiet';
+  if (group === 'closed') return 'neutral';
+  return 'course';
+}
+
+/** The one-line summary under the title. Explicit separators throughout. */
+function subtitle(a: FacultyAssignment, now: Date): string {
+  const sep = ' · ';
+  const marks = `${a.marks} marks`;
+  const group = facultyGroupFor(a, now);
+
+  if (group === 'draft') {
     return a.opensAt
       ? `Opens ${formatDay(a.opensAt, now)}${sep}${marks}`
       : `Not scheduled${sep}${marks}`;
   }
-  if (a.status === 'closed') return `Closed${sep}${marks}`;
-  if (a.opensAt && a.opensAt > now) {
-    return `Opens ${formatDay(a.opensAt, now)}${sep}${marks}`;
+  if (group === 'scheduled' && a.opensAt) {
+    return `Opens ${formatDay(a.opensAt, now)}${sep}due ${formatDay(a.dueAt, now)}${sep}${marks}`;
   }
+  if (group === 'closed') return `Closed${sep}${marks}`;
   if (a.allowLate && a.lateUntil && a.lateUntil > now) {
     return `Due ${formatDay(a.dueAt, now)}${sep}late accepted till ${formatDay(a.lateUntil, now)}${sep}${marks}`;
   }

@@ -158,6 +158,61 @@ function isStillAccepting(input: AssignmentStateInput, now: Date): boolean {
   return input.lateUntil > now;
 }
 
+/* ---------------------------------------------------------------------------
+ * The faculty view of the same assignment
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Which group an assignment belongs to on the professor's list.
+ *
+ * It is DERIVED, through the same `deriveAssignmentState` the student side
+ * uses, because there must not be two notions of state in this codebase.
+ * Grouping on `status` alone was wrong in a way that showed: an assignment
+ * published on 31 July but opening on 10 August has `status = 'open'`, so it
+ * sat under "Waiting on you — open to students, or past due and not yet
+ * marked", which it is neither of. It is scheduled.
+ *
+ * The two questions the two surfaces ask are genuinely different, though:
+ *   - a student asks "where does this stand FOR ME" — which needs their own
+ *     submission and whether grades are out;
+ *   - a professor asks "where does this stand AT ALL" — which is the same
+ *     derivation with no student in it.
+ * So this passes no submission and no grade, and reads the result.
+ */
+export type FacultyGroup = 'waiting' | 'scheduled' | 'closed' | 'draft';
+
+export type FacultyAssignmentLike = {
+  status: 'draft' | 'open' | 'closed';
+  opensAt: Date | null;
+  dueAt: Date;
+  allowLate: boolean;
+  lateUntil: Date | null;
+};
+
+/** The assignment's own state, with no student in the picture. */
+export function deriveForFaculty(
+  a: FacultyAssignmentLike,
+  now: Date = new Date(),
+): DerivedState {
+  return deriveAssignmentState(
+    { ...a, submittedAt: null, hasVisibleGrade: false },
+    now,
+  );
+}
+
+export function facultyGroupFor(
+  a: FacultyAssignmentLike,
+  now: Date = new Date(),
+): FacultyGroup {
+  // Drafts and closed assignments are answered by `status` alone — a draft has
+  // no student-facing state at all, and closed is the end of the line.
+  if (a.status === 'draft') return 'draft';
+  if (a.status === 'closed') return 'closed';
+
+  // Everything still open is placed by what the dates actually say.
+  return deriveForFaculty(a, now).state === 'upcoming' ? 'scheduled' : 'waiting';
+}
+
 /** Tailwind classes per state. Kept beside the derivation so a new state cannot
  *  be added without someone deciding how it looks. */
 export const STATE_STYLES: Record<AssignmentState, string> = {

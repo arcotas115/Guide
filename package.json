@@ -9,9 +9,10 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "seed": "tsx scripts/seed.ts",
-    "test": "npm run test:domain && npm run test:rls",
+    "test": "npm run test:domain && npm run test:actions && npm run test:rls",
     "test:domain": "tsx scripts/test-domain.ts",
-    "test:rls": "node supabase/tests/rls.test.mjs"
+    "test:rls": "node supabase/tests/rls.test.mjs",
+    "test:actions": "tsx scripts/test-actions.mts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

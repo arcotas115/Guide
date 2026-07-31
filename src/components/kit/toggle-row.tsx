@@ -98,11 +98,14 @@ export function PillToggle({
   pressed,
   onChange,
   disabled = false,
+  size = 'default',
 }: {
   label: string;
   pressed: boolean;
   onChange: (value: boolean) => void;
   disabled?: boolean;
+  /** `compact` fits four presets on one row inside the form's right column. */
+  size?: 'default' | 'compact';
 }) {
   return (
     <button
@@ -111,7 +114,10 @@ export function PillToggle({
       disabled={disabled}
       onClick={() => onChange(!pressed)}
       className={cn(
-        'rounded-lg px-3.5 py-2 text-[13.5px] font-medium transition-colors',
+        'rounded-lg font-medium whitespace-nowrap transition-colors',
+        size === 'compact'
+          ? 'px-2.5 py-1.5 text-[12.5px]'
+          : 'px-3.5 py-2 text-[13.5px]',
         'focus-visible:ring-ring/50 outline-none focus-visible:ring-2',
         pressed
           ? 'bg-ink text-canvas'
