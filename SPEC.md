@@ -1,8 +1,15 @@
 # SPEC.md — Campus: full product specification
 
 This is the authoritative spec for the Campus app. Read it before building.
-Companion: `CLAUDE.md` (operating rules and stack). Where this spec and code
-disagree, this spec wins — update it if requirements change.
+Companion: `BUILD_RULES.md` (operating rules and stack). Where this
+spec and code disagree, this spec wins — update it if requirements change.
+
+**Revision 2 (Milestone 1A).** Three amendments, all made before any assignment or
+grade row existed: (1) grades moved off `submissions` onto their own table so an
+unpublished grade is physically unreadable rather than merely unrendered;
+(2) `late_until`, `late_penalty_pct_per_day` and `hide_names_while_grading` added to
+`assignments` — the prototype's create-assignment form had all three and this spec did
+not; (3) Milestone 1 split into four sessions. Search "Revision 2" to find each change.
 
 ---
 
@@ -110,7 +117,10 @@ assignment appears (course list, To-Do, home) so they never doubt "did it go thr
   Land on Assignments (no separate "Overview" dashboard).
 - **Course info** — form to edit the info students read; mark-split with live "= 100%".
 - **Assignments** — table with each assignment's state, submitted progress, and grading
-  status. Create/edit assignment (see 3.7). Extending a deadline auto-posts an announcement.
+  status. Create/edit assignment (see 3.7). **Publishing** an assignment and
+  **extending** a deadline both auto-post an announcement to the course. (Revision 2:
+  the prototype's create form states this on publish; this spec previously mentioned it
+  only on extend. Implemented in the Announcements session, not Milestone 1A.)
 - **Submissions** — per assignment, a table of students with submission state,
   timestamps, late flags, marks. Click a student → SpeedGrader (see 3.8).
 - **Announcements** — posted list + compose. Posting appears instantly on student phones.
@@ -145,16 +155,32 @@ own submission + `grades_released`:
 - **Submitted** — the student has a submission; "submitted [time] · awaiting grade".
 - **Graded** — has a grade AND grades_released=true; shows mark + feedback.
 - **Overdue** — past due_at, no submission. The only state with the rust accent.
-  If allow_late, shows "accepted till [date]" (derived from due_at + the allowed window).
+  If allow_late, shows "accepted till [date]" — read from the assignment's stored
+  `late_until`. (Revision 2: this previously said "derived from due_at + the allowed
+  window", but no such window was ever defined anywhere in this spec, which made the
+  derivation impossible as written. The window is now stored explicitly.)
 (Draft assignments are not visible to students at all.)
 
 Assignment properties (set by professor on create):
 - title, instructions, attached files, marks, open date, due date.
-- **late submission allowed?** — a per-assignment toggle (drives the "accepted till" state).
+- **late submission allowed?** — a per-assignment toggle. When on, an explicit
+  **late until** date sets the end of the late-acceptance window and is what the
+  "accepted till [date]" copy reads. When on with no date set, late work is accepted
+  until the assignment is closed.
+- **late penalty** — percent per day, `0` meaning no deduction (UI presets 0 / 5 / 10 /
+  20, custom value allowed). `0` is what the student-facing "no penalty mentioned" copy
+  renders — the absence of a penalty is a value, not a missing concept.
+- **hide names while grading** — anonymous grading. The professor sees roll numbers
+  instead of names in SpeedGrader until a grade is saved for that submission.
+  Display-only; it never changes stored data.
 - **submission types accepted** — any combination of file(s) (any type) / link / text.
   Default: all allowed. (v1: open by default.)
 - **is team assignment?** — if yes, pick which **team set** it grades against.
 - Multiple attempts allowed; the newest submission is the graded one.
+
+(Revision 2: the last three of these come from the prototype's create-assignment form
+and were absent from this spec. They are columns on `assignments`, added in 1A while
+the table was still empty. Their UI ships in the session that uses each one.)
 
 The same assignment object appears in its course's Assignments AND (if open/overdue)
 aggregated in the student's To-Do. Submitting removes it from To-Do and sets the ✓.
@@ -173,8 +199,12 @@ aggregated in the student's To-Do. Submitting removes it from To-Do and sets the
 
 **Publish flow** — grades are private until released (governed by
 `assignments.grades_released`, NOT a per-submission flag):
-- Grade states (derived): Not graded (no graded_at) → **Graded (unpublished)** (graded_at
-  set, grades_released=false) → **Published** (grades_released=true).
+- Grade states (derived): Not graded (no `submission_grades` row) → **Graded
+  (unpublished)** (row exists, grades_released=false) → **Published** (row exists,
+  grades_released=true).
+- **This is enforced in the DATABASE, not in the UI.** An unpublished grade is
+  physically unreadable by the student, not merely unrendered — see `submission_grades`
+  in §4. (Revision 2.)
 - Saving a grade sets graded_at but does not release it; student still sees "awaiting grade".
 - Submissions table distinguishes Not submitted / Submitted / Graded (unpublished) /
   Published, and has a **"Publish all grades"** action (flips grades_released=true for the
@@ -228,7 +258,7 @@ Offerings, Timetable) · PEOPLE (Students, Faculty, Enrolment).
 ## 4. Data model (Postgres / Supabase)
 
 **SCALE DISCIPLINE (target: 1,000+ institutions across many cities):** This schema is
-designed to be shardable by tenant. Enforce ALL of these (see CLAUDE.md load-bearing
+designed to be shardable by tenant. Enforce ALL of these (see BUILD_RULES.md load-bearing
 rules): every table has `institution_id NOT NULL`; all PKs are UUIDs; no foreign key
 crosses an institution boundary; every query is tenant-scoped (zero cross-tenant queries
 ever); institution-specific rules are config-as-data (not hardcoded); index every
@@ -276,6 +306,8 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
 ### Assignments & submissions
 - **assignments**(id, offering_id, created_by, title, instructions, marks numeric(6,2),
   opens_at timestamptz?, due_at timestamptz, allow_late boolean default true,
+  late_until timestamptz?, late_penalty_pct_per_day numeric(5,2) not null default 0,
+  hide_names_while_grading boolean not null default false,
   accept_file boolean default true, accept_link boolean default true,
   accept_text boolean default true, is_team boolean default false,
   team_set_id? → team_sets, created_at)
@@ -287,20 +319,52 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
     • `grades_released` boolean default false + `grades_released_at` timestamptz? —
       whether the GRADES for this assignment have been published to students (the
       "Publish all grades" action). Independent of `status`.
+  — **THE LATE WINDOW IS STORED, NOT DERIVED** (Revision 2). `late_until` is the
+    explicit end of the late-acceptance window and is what the student's "accepted till
+    [date]" copy reads. Constraints: `late_until is null or late_until > due_at`, and
+    `late_until` must be null when `allow_late` is false. `allow_late = true` with a
+    null `late_until` means late work is accepted until the assignment is closed.
+  — `late_penalty_pct_per_day numeric(5,2) not null default 0`, constrained between 0
+    and 100. `0` = no deduction. Whether this is APPLIED to a saved grade is an open
+    question deferred to Milestone 1C — see Decisions below. Nothing computes with it
+    before then.
+  — `hide_names_while_grading` — anonymous grading in SpeedGrader (Milestone 1C).
+    Display-only: it never alters stored data and never changes the Submissions table's
+    own counts.
   index(offering_id, due_at)
 - **assignment_files**(id, assignment_id, storage_path, file_name) — prof-attached files.
 - **submissions** — DECIDED model (do not offer alternatives): exactly ONE submission
   row per student per assignment (or per team per assignment for team assignments).
   Resubmissions add a new attempt to `submission_files` and bump the submission's
-  `latest_attempt`; the grade lives on this single row.
+  `latest_attempt`.
   (id, assignment_id, student_id?, team_id?, submitted_at, is_late boolean default false,
-   latest_attempt int default 1, grade numeric(6,2)?, feedback text?, graded_by?,
-   graded_at?)
+   latest_attempt int default 1)
   — individual: unique(assignment_id, student_id); team: unique(assignment_id, team_id).
     Exactly one of student_id / team_id is set (team_id iff the assignment is_team).
-  — NO per-submission publish flag. Whether a grade is visible to students is governed by
-    the assignment's `grades_released` (see assignments). A grade with graded_at set but
-    grades_released=false is "graded (unpublished)". index(student_id)
+  — **The grade does NOT live on this row** (Revision 2 — it used to). See
+    `submission_grades` below. index(student_id), index(team_id)
+
+- **submission_grades**(submission_id pk → submissions, grade numeric(6,2) not null,
+  feedback text?, graded_by → profiles, graded_at timestamptz not null default now(),
+  updated_at timestamptz not null default now())
+  — **WHY THIS IS A SEPARATE TABLE. Do not fold it back into `submissions`.**
+    RLS is ROW-level. It can hide a row; it cannot hide a *column* on a row the user is
+    entitled to read. A student must be able to read their own `submissions` row from
+    the moment they submit — that row is what drives the persistent ✓ and the
+    "submitted [time] · awaiting grade" line. If the grade lived on that row, it would
+    be readable over the API the instant the professor saved it, no matter what the UI
+    chose to render. That breaks both promises in §3.8: that a professor can grade over
+    days and adjust before anyone sees, and that all students find out together.
+    Splitting the grade onto its own row turns visibility into a pure row-level
+    question, which is precisely what RLS enforces well.
+  — Existence of the row = "graded". Visibility of the row to a student is governed by
+    the parent assignment's `grades_released`. There is still NO per-submission publish
+    flag — that part of the original decision is unchanged.
+  — Team assignments: one `submissions` row per team means one `submission_grades` row
+    per team, which is what applies a single grade to every member.
+  — index(graded_by). The student read path joins
+    submission_grades → submissions → assignments, so all three join columns must be
+    indexed (see RLS notes below).
 - **submission_files**(id, submission_id, attempt int default 1, kind check in
   ('file','link','text'), storage_path?, url?, text_body?, file_name?, uploaded_at)
   — one submission can have several items in one attempt (a file + a link + text), and
@@ -352,8 +416,17 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
   can insert submissions/team-joins/attendance-marks/drive-applications as themselves.
 - **faculty:** can select/modify rows for offerings they teach (via teaching_assignments).
 - **admin / placement_officer:** can select/modify rows within their institution.
+- **submission_grades is the tightest policy in the schema** (Revision 2). Faculty who
+  teach the offering: full select/insert/update. Student: SELECT ONLY where the parent
+  submission is their own (or belongs to their team) AND the parent assignment has
+  `grades_released = true`. Students never get INSERT or UPDATE. This policy is what
+  makes "grade privately, release together" real rather than cosmetic, so it deserves
+  its own explicit tests in `test:rls`, including the ugly path: a graded-but-
+  unpublished row must be invisible to the student it belongs to.
 - All policies also scope by institution_id. Index every column a policy compares
-  (student_id, faculty_id via join, institution_id, offering_id).
+  (student_id, faculty_id via join, institution_id, offering_id, and for
+  submission_grades: submissions.student_id, submissions.team_id,
+  assignments.grades_released).
 - Recommended: write small SQL helper functions — e.g. `current_institution_id()`,
   `current_role()`, `teaches_offering(offering_id)`, `enrolled_in_offering(offering_id)`
   — marked STABLE, and reference them in policies. Keeps policies readable and consistent.
@@ -371,8 +444,16 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
   (team_set_id, student_id) via a helper — since team_members is keyed by team_id, add a
   denormalized team_set_id column to team_members and put unique(team_set_id, student_id)
   on it. This makes "one team per set" impossible to violate even if app logic slips.
-- **Grade write atomicity (team assignments).** Writing one grade to all team members
-  must be atomic — do it in a single transaction / RPC so all members get it or none do.
+- **Grade write atomicity (team assignments) — resolved by the model** (Revision 2).
+  A team assignment has ONE `submissions` row per team, therefore ONE
+  `submission_grades` row per team. There is no fan-out write left to make atomic;
+  every member reads the same row. The original concern no longer applies.
+- **Late penalty application — DEFERRED to Milestone 1C.** `late_penalty_pct_per_day`
+  is stored from 1A but nothing computes with it until SpeedGrader exists. The open
+  question: does SpeedGrader auto-reduce the saved grade, or show the deduction as a
+  suggestion the professor accepts? Recommendation: SHOW, do not apply. Silently
+  altering a professor's number is exactly the kind of thing that costs trust, and
+  trust is the product. Decide before writing SpeedGrader and record the answer here.
 - **Publish-grades atomicity.** "Publish all grades" flips assignment.grades_released =
   true in one write; individual post-publish corrections just update that submission's
   grade (visible immediately because grades_released is already true).
@@ -400,14 +481,28 @@ guard. Role-based redirect (student→mobile home, faculty→prof home, admin→
 Deploy to Vercel. Two test users (a student, a professor) can log in and land on the
 right home. Nothing else. Commit.
 
-**Milestone 1 — the end-to-end assignment slice** (proves the whole system):
-1. Admin (or seed data): institution, a term, a department, a course + offering, one
-   professor assigned, a few students enrolled.
-2. Professor: create an assignment in that offering.
-3. Student: see it in the course + To-Do, submit a file.
-4. Professor: see submissions, grade in SpeedGrader (unpublished), Publish all.
-5. Student: see the published grade + class average.
-This single loop exercises auth, roles, RLS, storage, and the core cycle. Get it solid.
+**Milestone 1 — the end-to-end assignment slice** (proves the whole system). Split
+into FOUR sessions, one feature each, per BUILD_RULES.md rule 4 (Revision 2 — as originally
+written this was four features in one session, which is not bisectable when it breaks):
+
+- **1A — the assignment exists.** One migration carrying ALL schema change for this
+  milestone: the three new `assignments` columns, the `submission_grades` table with
+  its policies and indexes. Re-run `0003_grants.sql` once afterwards. Extend the seed
+  to a real teaching context (course, offering, professor assigned, ~13 students
+  enrolled). Professor creates and edits an assignment; student sees it in the course
+  with the correct derived state. No submissions yet.
+- **1B — the student submits.** Storage bucket + storage policies, submission and
+  attempts, the persistent ✓, the assignment appearing in and disappearing from To-Do.
+- **1C — the professor grades.** Submissions table, SpeedGrader, grade written to
+  `submission_grades` and held unpublished. Settle the late-penalty question first.
+- **1D — publish.** "Publish all grades" flips `grades_released`; the student Grades
+  screen shows their own mark plus class average and median computed over the
+  published set ONLY.
+
+All schema change lands in 1A deliberately: it means one grants re-run instead of
+several, and it means the `submission_grades` policy is written and tested by
+`test:rls` before a single real grade exists. This loop exercises auth, roles, RLS,
+storage, and the core cycle. Get it solid.
 
 **Then expand, one feature per session, reusing the proven pattern:**
 - Announcements (prof post → student stream + notifications)

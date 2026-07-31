@@ -42,6 +42,11 @@ await db.exec(`
 await db.exec(migration('0001_init_schema.sql'));
 await db.exec(migration('0002_rls_policies.sql'));
 await db.exec(migration('0003_grants.sql'));
+await db.exec(migration('0004_assignment_fields_and_grade_split.sql'));
+// 0004 creates a table, so 0003's ON ALL TABLES snapshot is stale — exactly the
+// re-run the migration's own header tells you to do. Doing it here means the
+// suite fails if that instruction is ever wrong.
+await db.exec(migration('0003_grants.sql'));
 
 // --- Test harness -----------------------------------------------------------
 let passed = 0;
@@ -119,11 +124,15 @@ const ids = {};
     courseA: mk(), courseB: mk(),
     offerA: mk(), offerB: mk(),
     profA: mk(), studA1: mk(), studA2: mk(), adminA: mk(),
+    // A second professor at the SAME college who teaches something else. Needed
+    // to test "faculty ≠ faculty who teaches this offering", which a single
+    // professor can never distinguish.
+    profA2: mk(),
     studB1: mk(),
     asgOpen: mk(), asgDraft: mk(),
   });
 
-  for (const u of ['profA', 'studA1', 'studA2', 'adminA', 'studB1']) {
+  for (const u of ['profA', 'profA2', 'studA1', 'studA2', 'adminA', 'studB1']) {
     await db.query(`insert into auth.users (id, email) values ($1, $2)`, [
       ids[u], `${u}@test.edu`,
     ]);
@@ -140,12 +149,13 @@ const ids = {};
   await db.query(
     `insert into public.profiles (id, institution_id, department_id, role, full_name, email, roll_number) values
        ($1,$2,$3,'faculty','Prof A','profa@test.edu',null),
+       ($10,$2,$3,'faculty','Prof A2','profa2@test.edu',null),
        ($4,$2,$3,'student','Student A1','a1@test.edu','A1'),
        ($5,$2,$3,'student','Student A2','a2@test.edu','A2'),
        ($6,$2,$3,'admin','Admin A','admina@test.edu',null),
        ($7,$8,$9,'student','Student B1','b1@test.edu','B1')`,
     [ids.profA, ids.instA, ids.deptA, ids.studA1, ids.studA2, ids.adminA,
-     ids.studB1, ids.instB, ids.deptB]
+     ids.studB1, ids.instB, ids.deptB, ids.profA2]
   );
   await db.query(
     `insert into public.terms (id, institution_id, name, starts_on, ends_on) values
@@ -233,9 +243,15 @@ await asUser(ids.profA, async () => {
 });
 
 console.log('\n\x1b[1mADMIN SCOPE — their institution, and only theirs\x1b[0m');
+// Ground truth from the owner, so adding a fixture user does not turn a real
+// security assertion into a failing arithmetic quiz.
+const instAProfiles = await count(
+  `select count(*)::int as n from public.profiles where institution_id = $1`,
+  [ids.instA],
+);
 await asUser(ids.adminA, async () => {
-  check('admin sees every profile in their institution (4)',
-    await count(`select count(*)::int n from public.profiles`), 4);
+  check(`admin sees every profile in their institution (${instAProfiles})`,
+    await count(`select count(*)::int n from public.profiles`), instAProfiles);
   check('admin still cannot see the other institution\'s profiles',
     await count(`select count(*)::int n from public.profiles where institution_id = $1`, [ids.instB]), 0);
 });
@@ -307,6 +323,222 @@ await expectDenied('a submission cannot be both individual and team',
 
 await expectDenied('attendance threshold cannot be set to a nonsense value',
   `update public.institutions set min_attendance_pct = 140 where id = $1`, [ids.instA]);
+
+// ============================================================================
+// ASSIGNMENT AUTHORSHIP (0004) — who may create an assignment, and where
+// ============================================================================
+console.log(`\n\x1b[1mASSIGNMENT AUTHORSHIP — teaching it is the permission\x1b[0m`);
+
+// Acceptance criterion 1. profA2 is faculty at the same college with the same
+// role and the same institution — the ONLY thing they lack is a
+// teaching_assignments row for this offering. That must be enough to stop them.
+await asUser(ids.profA2, async () => {
+  await expectDenied(
+    'faculty who do not teach the offering cannot create an assignment in it',
+    `insert into public.assignments (institution_id, offering_id, created_by, title, marks, due_at, status)
+       values ($1,$2,$3,'Injected by a non-teacher',10,'2026-09-01 23:59+05:30','open')`,
+    [ids.instA, ids.offerA, ids.profA2],
+  );
+});
+
+// Acceptance criterion 2.
+await asUser(ids.studA1, async () => {
+  await expectDenied(
+    'a student cannot create an assignment, even in their own course',
+    `insert into public.assignments (institution_id, offering_id, created_by, title, marks, due_at, status)
+       values ($1,$2,$3,'Free marks for me',100,'2026-09-01 23:59+05:30','open')`,
+    [ids.instA, ids.offerA, ids.studA1],
+  );
+});
+
+// The professor who DOES teach it must still be able to — a policy that denies
+// everyone is not a passing test, it is a broken feature.
+await asUser(ids.profA, async () => {
+  const before = await count(
+    `select count(*)::int as n from public.assignments where offering_id = $1`,
+    [ids.offerA],
+  );
+  await db.query(
+    `insert into public.assignments (institution_id, offering_id, created_by, title, marks, due_at, status)
+       values ($1,$2,$3,'Lab 5 — Paging',20,'2026-09-01 23:59+05:30','draft')`,
+    [ids.instA, ids.offerA, ids.profA],
+  );
+  check(
+    'the professor who teaches it CAN create one',
+    await count(
+      `select count(*)::int as n from public.assignments where offering_id = $1`,
+      [ids.offerA],
+    ),
+    before + 1,
+  );
+});
+
+// ============================================================================
+// SUBMISSION_GRADES (0004) — the tightest policy in the schema
+//
+// This group is the entire reason the grade was moved off `submissions`. The
+// claim under test: a saved-but-unreleased grade is PHYSICALLY unreadable by
+// the student it belongs to — not merely unrendered by a UI that could be
+// bypassed with a network tab.
+// ============================================================================
+console.log(`\n\x1b[1mSUBMISSION_GRADES — graded is not the same as published\x1b[0m`);
+
+{
+  // Written as the owner, mirroring what the professor's server action will do.
+  const subId = crypto.randomUUID();
+  await db.query(
+    `insert into public.submissions (id, institution_id, assignment_id, student_id)
+       values ($1,$2,$3,$4)`,
+    [subId, ids.instA, ids.asgOpen, ids.studA1],
+  );
+  await db.query(
+    `insert into public.submission_grades (submission_id, institution_id, grade, feedback, graded_by)
+       values ($1,$2,17.5,'Good analysis of the scheduler trace.',$3)`,
+    [subId, ids.instA, ids.profA],
+  );
+
+  // asgOpen still has grades_released = false (the column default).
+  check(
+    'precondition: the assignment has NOT had grades released',
+    await count(
+      `select count(*)::int as n from public.assignments where id = $1 and grades_released = false`,
+      [ids.asgOpen],
+    ),
+    1,
+  );
+
+  // ---- THE TEST THIS MIGRATION EXISTS FOR --------------------------------
+  await asUser(ids.studA1, async () => {
+    check(
+      'a graded-but-UNPUBLISHED grade is invisible to the student who owns it',
+      await count(`select count(*)::int as n from public.submission_grades`),
+      0,
+    );
+    // ...while the submission itself stays readable, which is what keeps the
+    // persistent ✓ and "awaiting grade" working. Both halves matter: hiding the
+    // submission too would have been a much easier and much worse fix.
+    check(
+      '...but their own submission row is still readable (the ✓ still works)',
+      await count(
+        `select count(*)::int as n from public.submissions where student_id = $1`,
+        [ids.studA1],
+      ),
+      1,
+    );
+  });
+
+  // The professor sees it the whole time — that is the point of grading over days.
+  await asUser(ids.profA, async () => {
+    check(
+      'the professor can read the unpublished grade they saved',
+      await count(`select count(*)::int as n from public.submission_grades`),
+      1,
+    );
+  });
+
+  // ---- Flip the flag; nothing else changes -------------------------------
+  await db.query(
+    `update public.assignments set grades_released = true, grades_released_at = now() where id = $1`,
+    [ids.asgOpen],
+  );
+
+  await asUser(ids.studA1, async () => {
+    check(
+      'releasing grades makes exactly that row appear',
+      await count(`select count(*)::int as n from public.submission_grades`),
+      1,
+    );
+    const { rows } = await db.query(
+      `select grade::text as v from public.submission_grades limit 1`,
+    );
+    check('...with the mark the professor actually saved', rows[0]?.v, '17.50');
+  });
+
+  // Released to the class ≠ released to the whole class's individual rows.
+  await asUser(ids.studA2, async () => {
+    check(
+      'a classmate still cannot read someone else\'s grade after release',
+      await count(`select count(*)::int as n from public.submission_grades`),
+      0,
+    );
+  });
+
+  await asUser(ids.studB1, async () => {
+    check(
+      'a student at another college sees no grades at all',
+      await count(`select count(*)::int as n from public.submission_grades`),
+      0,
+    );
+  });
+
+  // ---- Students never write grades, released or not ----------------------
+  await asUser(ids.studA1, async () => {
+    await expectDenied(
+      'a student cannot award themselves a grade',
+      `insert into public.submission_grades (submission_id, institution_id, grade)
+         values ($1,$2,20)`,
+      [crypto.randomUUID(), ids.instA],
+    );
+    await expectDenied(
+      'a student cannot edit the grade they were given',
+      `update public.submission_grades set grade = 20 where submission_id = $1`,
+      [subId],
+    );
+  });
+  await expectUnchanged(
+    '...and the mark is still what the professor set',
+    `select grade::text as v from public.submission_grades where submission_id = $1`,
+    [subId],
+    '17.50',
+  );
+
+  await asUser(ids.profA2, async () => {
+    await expectDenied(
+      'faculty who do not teach the offering cannot grade its submissions',
+      `update public.submission_grades set grade = 1 where submission_id = $1`,
+      [subId],
+    );
+  });
+
+  // Put it back so later assertions see the documented default.
+  await db.query(
+    `update public.assignments set grades_released = false, grades_released_at = null where id = $1`,
+    [ids.asgOpen],
+  );
+}
+
+// ============================================================================
+// ASSIGNMENT FIELD CONSTRAINTS (0004) — the DB is the last line, not the only one
+// ============================================================================
+console.log(`\n\x1b[1mASSIGNMENT FIELDS — late window and penalty constraints\x1b[0m`);
+
+const newAssignment = (cols, vals) =>
+  `insert into public.assignments (institution_id, offering_id, created_by, title, marks, due_at${cols})
+     values ($1,$2,$3,'Constraint probe',10,'2026-09-10 23:59+05:30'${vals})`;
+
+await expectDenied(
+  'a late window cannot end before the deadline',
+  newAssignment(', late_until', `, '2026-09-09 23:59+05:30'`),
+  [ids.instA, ids.offerA, ids.profA],
+);
+
+await expectDenied(
+  'a late window cannot exist when late work is not accepted',
+  newAssignment(', allow_late, late_until', `, false, '2026-09-12 23:59+05:30'`),
+  [ids.instA, ids.offerA, ids.profA],
+);
+
+await expectDenied(
+  'a late penalty above 100%/day is rejected',
+  newAssignment(', late_penalty_pct_per_day', `, 150`),
+  [ids.instA, ids.offerA, ids.profA],
+);
+
+await expectDenied(
+  'a negative late penalty is rejected',
+  newAssignment(', late_penalty_pct_per_day', `, -5`),
+  [ids.instA, ids.offerA, ids.profA],
+);
 
 // ============================================================================
 // GRANTS (0003) — the outer door, distinct from the RLS lock.
