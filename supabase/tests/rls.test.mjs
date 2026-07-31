@@ -8,7 +8,12 @@
 // one can and cannot see.
 //
 // It touches nothing remote — no Supabase project, no network. Run it before
-// every deploy, and after any change to 0002_rls_policies.sql.
+// every deploy, and after any change to a migration.
+//
+// It covers both halves of access control, which fail in different ways:
+//   0002 — RLS policies: which ROWS a role may touch.
+//   0003 — GRANTs: whether it may touch the table at all. Missing grants give
+//          "42501 permission denied", which no amount of reading 0002 explains.
 // ============================================================================
 import { PGlite } from '@electric-sql/pglite';
 import { readFileSync } from 'node:fs';
@@ -29,10 +34,14 @@ await db.exec(`
     as $fn$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $fn$;
   create role authenticated;
   create role anon;
+  -- service_role is BYPASSRLS in Supabase; mirroring that here is what makes
+  -- 0003's grants meaningful to test rather than merely syntactic.
+  create role service_role bypassrls;
 `);
 
 await db.exec(migration('0001_init_schema.sql'));
 await db.exec(migration('0002_rls_policies.sql'));
+await db.exec(migration('0003_grants.sql'));
 
 // --- Test harness -----------------------------------------------------------
 let passed = 0;
@@ -298,6 +307,111 @@ await expectDenied('a submission cannot be both individual and team',
 
 await expectDenied('attendance threshold cannot be set to a nonsense value',
   `update public.institutions set min_attendance_pct = 140 where id = $1`, [ids.instA]);
+
+// ============================================================================
+// GRANTS (0003) — the outer door, distinct from the RLS lock.
+//
+// The distinction this group exists to pin down: RLS decides WHICH ROWS a role
+// may touch; GRANT decides whether it may touch the table at all. service_role
+// passes the first check (bypassrls) and, before 0003, failed the second — the
+// "permission denied for table institutions" the seed script hit.
+// ============================================================================
+console.log(`\n\x1b[1mGRANTS — service_role gets in, anon does not\x1b[0m`);
+
+/** Run `fn` as a role with no JWT claim set — i.e. a raw connection as that
+ *  role, which is what PostgREST does after SET ROLE. */
+async function asRole(role, fn) {
+  await db.exec(`set role ${role};`);
+  await db.query(`select set_config('request.jwt.claim.sub', '', false)`);
+  try {
+    return await fn();
+  } finally {
+    await db.exec(`reset role;`);
+  }
+}
+
+// What the owner can see is the ground truth service_role must match — asserting
+// equality rather than a hardcoded number keeps this honest as the fixture grows.
+const ownerProfileCount = await count(
+  `select count(*)::int as n from public.profiles`,
+);
+
+await asRole('service_role', async () => {
+  // This exact read is what the seed does first, and what failed with 42501.
+  check(
+    'service_role can read institutions across every tenant',
+    await count(`select count(*)::int as n from public.institutions`),
+    2,
+  );
+  check(
+    'service_role sees every profile in both institutions (RLS bypassed)',
+    await count(`select count(*)::int as n from public.profiles`),
+    ownerProfileCount,
+  );
+
+  // The seed's actual write path: insert a tenant row and a profile.
+  const instId = crypto.randomUUID();
+  await db.query(
+    `insert into public.institutions (id, name, slug) values ($1,'Seed Test College','seed-test')`,
+    [instId],
+  );
+  check(
+    'service_role can insert an institution',
+    await count(`select count(*)::int as n from public.institutions where id = $1`, [instId]),
+    1,
+  );
+  await db.query(`delete from public.institutions where id = $1`, [instId]);
+  check(
+    'service_role can delete what it created',
+    await count(`select count(*)::int as n from public.institutions where id = $1`, [instId]),
+    0,
+  );
+});
+
+// anon has no grant at all, so this fails at the privilege check — before RLS
+// is ever consulted. There is no signed-out surface in this product.
+await asRole('anon', async () => {
+  await expectDenied(
+    'anon still cannot touch institutions',
+    `select count(*) from public.institutions`,
+  );
+  await expectDenied(
+    'anon still cannot touch profiles',
+    `select count(*) from public.profiles`,
+  );
+});
+
+// The load-bearing check: 0003 must not have handed authenticated a way past
+// RLS. Same query, same table, as a real student — still tenant-scoped.
+await asUser(ids.studA1, async () => {
+  check(
+    'authenticated is STILL confined to its own institution after 0003',
+    await count(`select count(*)::int as n from public.institutions`),
+    1,
+  );
+});
+
+// Every table needs both halves. A table with policies but no grant throws
+// 42501; a table with a grant but no RLS is wide open. Neither is caught by
+// reading either migration on its own.
+{
+  const { rows } = await db.query(`
+    select c.relname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind = 'r'
+      and (
+        not c.relrowsecurity
+        or not has_table_privilege('authenticated', c.oid, 'SELECT')
+        or not has_table_privilege('service_role', c.oid, 'SELECT')
+      )
+  `);
+  check(
+    `every table has RLS enabled AND is granted to both roles${rows.length ? ` (offenders: ${rows.map((r) => r.relname).join(', ')})` : ''}`,
+    rows.length,
+    0,
+  );
+}
 
 // ============================================================================
 console.log(`\n\x1b[1m${passed} passed, ${failed} failed\x1b[0m\n`);
