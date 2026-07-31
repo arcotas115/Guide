@@ -52,6 +52,7 @@ Migrations are plain SQL, applied by pasting into the Supabase **SQL Editor**
 | [`0001_init_schema.sql`](supabase/migrations/0001_init_schema.sql) | 29 tables. Tenant isolation enforced by *composite* foreign keys, not convention. |
 | [`0002_rls_policies.sql`](supabase/migrations/0002_rls_policies.sql) | RLS helpers, RLS enabled on every table, 63 policies. Default-deny. |
 | [`0003_grants.sql`](supabase/migrations/0003_grants.sql) | Table privileges. **Re-run this after any migration that adds a table.** |
+| [`0004_assignment_fields_and_grade_split.sql`](supabase/migrations/0004_assignment_fields_and_grade_split.sql) | Assignment form fields; moves the grade off `submissions` onto `submission_grades` so an unpublished mark is unreadable, not just unrendered. |
 
 Then seed a test institution and two users:
 
@@ -80,15 +81,23 @@ tables" turned off, so a new table starts with no grants at all.
 ## Checks
 
 ```bash
-npm run test:rls     # 37 assertions on a real Postgres (PGlite/WASM), no network
+npm test             # domain + rls, 96 assertions, no network
+npm run test:domain  # 40 — derived states, late window, timezone, validation
+npm run test:rls     # 56 — policies and grants on a real Postgres (PGlite/WASM)
 npm run typecheck
 npm run lint
 npm run build
 ```
 
-`test:rls` runs all three migrations against an in-process Postgres, seeds **two**
+`test:rls` runs every migration against an in-process Postgres, seeds **two**
 institutions, and queries as each role with RLS in force — so "a student cannot
-read another student's data" is asserted, not assumed. Run it before every deploy.
+read another student's data" is asserted, not assumed. It also covers the
+tightest case in the schema: a saved-but-unreleased grade returns zero rows to
+the student who owns it, while their submission row still returns one.
+
+`test:domain` covers the pure logic: the five derived assignment states and
+their precedence, the late-acceptance window, the IST round-trip, and every
+form validation rule. Run both before every deploy.
 
 ---
 

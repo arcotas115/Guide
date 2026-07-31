@@ -209,6 +209,26 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* ==========================================================================
+   COURSE IDENTITY SCOPE
+
+   Colour is identity: one colour per course, carried across its card, calendar
+   block, to-do row, grades and tinted section headers. The colour itself is a
+   COLUMN (courses.color) — config-as-data — so a component sets it inline:
+
+     <div className="course-scope" style={{ '--course-color': course.color }}>
+
+   The tints below are then derived from it with color-mix rather than looked up
+   in a table of six known palettes. That matters: an admin picking a colour the
+   designers never saw still gets a coherent card, and adding a course colour
+   stays an UPDATE rather than a deploy.
+   ========================================================================== */
+.course-scope {
+  --course-tint: color-mix(in oklab, var(--course-color) 12%, white);
+  --course-wash: color-mix(in oklab, var(--course-color) 6%, white);
+  --course-wash-border: color-mix(in oklab, var(--course-color) 18%, white);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

@@ -61,15 +61,9 @@ export function deriveAssignmentState(
   input: AssignmentStateInput,
   now: Date = new Date(),
 ): DerivedState {
-  const {
-    status,
-    opensAt,
-    dueAt,
-    allowLate,
-    lateUntil,
-    submittedAt,
-    hasVisibleGrade,
-  } = input;
+  // allowLate/lateUntil are read through the helpers below rather than here,
+  // so the window rules live in exactly one place.
+  const { status, opensAt, dueAt, submittedAt, hasVisibleGrade } = input;
 
   // Order matters below. Each branch assumes the ones above it did not match.
 
