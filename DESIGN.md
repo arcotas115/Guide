@@ -18,6 +18,21 @@ If a value you need is not here, ask before inventing one.
 | card | `#FFFDF8` | cards and rows on the canvas |
 | card border | `#EAE7DF` | 1px card and row borders |
 | chevron | `#C0C4BF` | the disclosure chevron on tappable rows |
+| input border | `#D5D2C8` | the outline of anything you interact with |
+
+`card-border` is deliberately too pale to outline a control. A switch, input or
+selectable chip uses `input border` instead — that contrast is what makes an interactive
+element look interactive.
+
+### Ink ramp
+
+| Token | Value | Use |
+|---|---|---|
+| ink | `#14171A` | primary text, headings |
+| ink-strong | `#303531` | emphasised body |
+| ink-muted | `#55605A` | secondary lines, subtitles |
+| ink-soft | `#7A7E79` | metadata, timestamps |
+| ink-faint | `#9A9E98` | disabled and not-yet-available |
 
 Never plain `#FFFFFF` as a page background and never plain `#000000` as body text. The
 warmth is the point; pure white and pure black read as clinical, which is the exact
@@ -58,8 +73,15 @@ Every course carries **four** tokens, stored in the database, never hardcoded:
 | HS201 | `#3F7A4B` | — | — | — |
 | OE310 | `#8A6A55` | — | — | — |
 
-(Only CS301's full set is recorded here. Derive the others on the same relationship, or
-pull them from the prototype source before using them.)
+**Only `color` is stored.** `courses.color` is the single source of truth; `tint`, `wash`
+and `washBorder` are DERIVED from it at render time by mixing toward the canvas
+(approximately 9% / 5% / 14%). Do not add columns for them — one colour per course is all
+an administrator should ever have to choose, and three stored derivatives are three
+values that can drift out of sync with the fourth.
+
+The derived results land within a point or two per channel of the values recorded during
+design. That difference is below what anyone can perceive on a flat tint, and the
+consistency of having one source is worth more than an exact match.
 
 Where each token goes:
 - **color** — the course card's left spine, the course code text, the course hub header
@@ -79,6 +101,12 @@ Reserved **strictly** for: overdue assignments, attendance below the institution
 threshold, and incomplete admin setup. Nothing else on any screen is rust. If a third
 thing starts using it, the signal is gone. Everything that is not demanding action is
 calm.
+
+**Settled case: the late-penalty badge is NOT rust.** A penalty rule is a property of a
+perfectly healthy assignment, and a normal course has it on many rows at once — rendering
+those in rust puts the attention colour on half a table where nothing needs attention.
+It renders neutral. (The prototype shows it in rust; the prototype is wrong here, and
+this rule wins.)
 
 ## 6. Components
 
