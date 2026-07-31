@@ -9,6 +9,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "seed": "tsx scripts/seed.ts",
+    "test": "npm run test:domain && npm run test:rls",
+    "test:domain": "tsx scripts/test-domain.ts",
     "test:rls": "node supabase/tests/rls.test.mjs"
   },
   "dependencies": {

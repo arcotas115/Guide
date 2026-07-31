@@ -1,0 +1,175 @@
+/**
+ * The five student-facing assignment states.
+ *
+ * THESE ARE DERIVED. There is no `state` column and there must never be one
+ * (SPEC.md §3.7). A stored state is a second source of truth that drifts the
+ * moment a deadline passes with nobody watching — the assignment would sit at
+ * "Open" until some job remembered to move it.
+ *
+ * Everything that shows an assignment to a student calls this: the course list,
+ * the detail screen, and 1B's To-Do. One function means those three cannot
+ * disagree, which is the actual reason it lives here rather than in a component.
+ */
+import { formatDay } from '@/lib/format';
+
+export type AssignmentState =
+  | 'upcoming'
+  | 'open'
+  | 'submitted'
+  | 'graded'
+  | 'overdue';
+
+/** The stored facts the derivation reads. Nothing else may influence it. */
+export type AssignmentStateInput = {
+  status: 'draft' | 'open' | 'closed';
+  opensAt: Date | null;
+  dueAt: Date;
+  allowLate: boolean;
+  lateUntil: Date | null;
+  /** The student's own submission, if any. */
+  submittedAt: Date | null;
+  /**
+   * Whether a grade row is visible to this student. Because of the RLS policy on
+   * submission_grades, a student can only ever see a row whose parent assignment
+   * has grades_released = true — so if this is true, it is published, full stop.
+   * The professor's unpublished draft mark is not merely hidden here; it never
+   * arrives from the database at all.
+   */
+  hasVisibleGrade: boolean;
+};
+
+export type DerivedState = {
+  state: AssignmentState;
+  /** One line, student-facing. Warm and specific, never a bare status word. */
+  label: string;
+  /**
+   * Rust. TRUE FOR OVERDUE AND NOTHING ELSE (BUILD_RULES.md design language).
+   * If you find yourself wanting this true for another state, the answer is no.
+   */
+  isUrgent: boolean;
+  /** Set only when late work is still being accepted — drives "accepted till …". */
+  acceptingUntil: Date | null;
+  /** Whether a submit control should appear at all. Used by 1B. */
+  canSubmit: boolean;
+};
+
+/**
+ * `now` is a parameter, not `new Date()` inside, so this is a pure function that
+ * can be tested at any point on the timeline.
+ */
+export function deriveAssignmentState(
+  input: AssignmentStateInput,
+  now: Date = new Date(),
+): DerivedState {
+  const {
+    status,
+    opensAt,
+    dueAt,
+    allowLate,
+    lateUntil,
+    submittedAt,
+    hasVisibleGrade,
+  } = input;
+
+  // Order matters below. Each branch assumes the ones above it did not match.
+
+  // 1. Graded outranks everything: it is the end of the assignment's life for
+  //    the student, whatever the dates now say.
+  if (hasVisibleGrade) {
+    return {
+      state: 'graded',
+      label: 'Graded',
+      isUrgent: false,
+      acceptingUntil: null,
+      canSubmit: false,
+    };
+  }
+
+  // 2. Submitted but not yet graded. Deliberately reassuring — the whole point
+  //    of the persistent ✓ is that nobody has to wonder whether it went through.
+  if (submittedAt) {
+    return {
+      state: 'submitted',
+      label: `Submitted ${formatDay(submittedAt)} · awaiting grade`,
+      isUrgent: false,
+      acceptingUntil: null,
+      canSubmit: status === 'open' && isStillAccepting(input, now),
+    };
+  }
+
+  // 3. Not open to them yet. Visible, but not actionable, and not alarming.
+  if (opensAt && opensAt > now) {
+    return {
+      state: 'upcoming',
+      label: `Opens ${formatDay(opensAt)}`,
+      isUrgent: false,
+      acceptingUntil: null,
+      canSubmit: false,
+    };
+  }
+
+  // 4. Missed. The only rust state in the app besides low attendance.
+  //
+  //    Note that `closed` lands here too when nothing was submitted: SPEC's five
+  //    states have no name for "the professor closed it early and you did not
+  //    submit", and from the student's side that is simply a missed assignment.
+  //    The label distinguishes the two so the copy stays honest.
+  const pastDue = now > dueAt;
+  if (status === 'closed' || pastDue) {
+    const acceptingUntil = acceptingUntilDate(input, now);
+    return {
+      state: 'overdue',
+      label: acceptingUntil
+        ? `Overdue · accepted till ${formatDay(acceptingUntil)}`
+        : status === 'closed' && !pastDue
+          ? 'Closed'
+          : `Overdue · was due ${formatDay(dueAt)}`,
+      isUrgent: true,
+      acceptingUntil,
+      canSubmit: status === 'open' && acceptingUntil !== null,
+    };
+  }
+
+  // 5. Open and waiting.
+  return {
+    state: 'open',
+    label: `Due ${formatDay(dueAt)}`,
+    isUrgent: false,
+    acceptingUntil: null,
+    canSubmit: status === 'open',
+  };
+}
+
+/**
+ * The end of the late-acceptance window, or null if late work is not being
+ * accepted right now.
+ *
+ * `allow_late = true` with a null `late_until` means "accepted until the
+ * assignment is closed" (SPEC.md §4), which is an open-ended window — so there
+ * is no date to show, but submission is still permitted. That case returns null
+ * here and is handled by canSubmit separately, because "no end date" and "not
+ * accepted" are different things that would otherwise collapse into one.
+ */
+function acceptingUntilDate(input: AssignmentStateInput, now: Date): Date | null {
+  if (!input.allowLate || input.status !== 'open') return null;
+  if (!input.lateUntil) return null;
+  return input.lateUntil > now ? input.lateUntil : null;
+}
+
+function isStillAccepting(input: AssignmentStateInput, now: Date): boolean {
+  if (now <= input.dueAt) return true;
+  if (!input.allowLate) return false;
+  // Open-ended window: accepted until the assignment is closed.
+  if (!input.lateUntil) return true;
+  return input.lateUntil > now;
+}
+
+/** Tailwind classes per state. Kept beside the derivation so a new state cannot
+ *  be added without someone deciding how it looks. */
+export const STATE_STYLES: Record<AssignmentState, string> = {
+  upcoming: 'text-subtle',
+  open: 'text-ink-muted',
+  submitted: 'text-moss-deep',
+  graded: 'text-moss-deep',
+  overdue: 'text-rust',
+};
