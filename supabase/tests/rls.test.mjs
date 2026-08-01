@@ -45,6 +45,7 @@ await db.exec(migration('0003_grants.sql'));
 await db.exec(migration('0004_assignment_fields_and_grade_split.sql'));
 await db.exec(migration('0005_foundations.sql'));
 await db.exec(migration('0006_tenant_integrity.sql'));
+await db.exec(migration('0007_soft_delete.sql'));
 // 0004 and 0005 create tables, so 0003's ON ALL TABLES snapshot is stale —
 // exactly the re-run those migrations' headers tell you to do. Running it LAST,
 // after every table exists and is commented, proves two things at once: that the
@@ -733,6 +734,141 @@ console.log(`\n\x1b[1mLEFTOVERS FROM 1A — the database now agrees with zod\x1b
 }
 
 // ============================================================================
+// SOFT DELETE (0007) — a hidden row does not exist for a student
+// ============================================================================
+console.log(`\n\x1b[1mSOFT DELETE — hidden means hidden, and reversible\x1b[0m`);
+{
+  const asgId = crypto.randomUUID();
+  await db.query(
+    `insert into public.assignments (id, institution_id, offering_id, created_by, title, marks, due_at, status)
+       values ($1,$2,$3,$4,'Lab 9 — soft delete probe',10,'2026-09-20 23:59+05:30','open')`,
+    [asgId, ids.instA, ids.offerA, ids.profA]);
+
+  const seenBy = (who) => asUser(who, () =>
+    count(`select count(*)::int as n from public.assignments where id = $1`, [asgId]));
+
+  check('before deleting, the enrolled student sees it', await seenBy(ids.studA1), 1);
+  check('...and so does the professor', await seenBy(ids.profA), 1);
+
+  // Deleting is an UPDATE. It needs no delete policy — the existing teacher
+  // write policy already covers it, which is why 0007 adds none.
+  await asUser(ids.profA, () =>
+    db.query(`update public.assignments set deleted_at = now() where id = $1`, [asgId]));
+
+  check('a soft-deleted assignment is invisible to the enrolled student', await seenBy(ids.studA1), 0);
+  check('...but still readable by the professor who teaches it', await seenBy(ids.profA), 1);
+  check('...and by an admin, so a mistake is recoverable', await seenBy(ids.adminA), 1);
+
+  // The row is genuinely still there — invisibility is a policy, not a delete.
+  check('...and the row itself still exists',
+    await count(`select count(*)::int as n from public.assignments where id = $1`, [asgId]), 1);
+
+  await asUser(ids.profA, () =>
+    db.query(`update public.assignments set deleted_at = null where id = $1`, [asgId]));
+  check('undeleting restores student visibility', await seenBy(ids.studA1), 1);
+
+  // A student must not be able to hide work from themselves, or resurrect
+  // something staff hid. They have no UPDATE policy on assignments at all.
+  await asUser(ids.profA, () =>
+    db.query(`update public.assignments set deleted_at = now() where id = $1`, [asgId]));
+  await asUser(ids.studA1, async () => {
+    await expectDenied('a student cannot undelete what staff hid',
+      `update public.assignments set deleted_at = null where id = $1`, [asgId]);
+  });
+  await expectUnchanged('...it is still hidden',
+    `select (deleted_at is not null) as v from public.assignments where id = $1`, [asgId], true);
+  await db.query(`update public.assignments set deleted_at = null where id = $1`, [asgId]);
+  await db.query(`delete from public.assignments where id = $1`, [asgId]);
+}
+
+console.log(`\n\x1b[1mPARTIAL UNIQUES — reuse a code, never a roll number\x1b[0m`);
+{
+  const c1 = crypto.randomUUID(), c2 = crypto.randomUUID();
+  await db.query(
+    `insert into public.courses (id, institution_id, department_id, code, title, credits, color)
+       values ($1,$2,$3,'CS999','Retired Course',3,'#4C5BD4')`,
+    [c1, ids.instA, ids.deptA]);
+
+  await expectDenied('two LIVE courses cannot share a code',
+    `insert into public.courses (id, institution_id, department_id, code, title, credits, color)
+       values ($1,$2,$3,'CS999','Replacement',3,'#0E7C86')`,
+    [c2, ids.instA, ids.deptA]);
+
+  await db.query(`update public.courses set deleted_at = now() where id = $1`, [c1]);
+  await db.query(
+    `insert into public.courses (id, institution_id, department_id, code, title, credits, color)
+       values ($1,$2,$3,'CS999','Replacement',3,'#0E7C86')`,
+    [c2, ids.instA, ids.deptA]);
+  check('...but a retired CS999 does not block a new one',
+    await count(`select count(*)::int as n from public.courses where code = 'CS999' and institution_id = $1`, [ids.instA]),
+    2);
+
+  // The leak this could open: a soft-deleted course and a live one share a key,
+  // so a join that forgets deleted_at silently returns two rows.
+  check('...and only one of them is live',
+    await count(`select count(*)::int as n from public.courses where code = 'CS999' and institution_id = $1 and deleted_at is null`, [ids.instA]),
+    1);
+
+  // A roll number is issued once and held for all time — profiles carry no
+  // deleted_at, so this index was deliberately left total.
+  await expectDenied('a roll number is never reusable, deleted or not',
+    `insert into public.profiles (id, institution_id, department_id, role, full_name, email, roll_number)
+       values (gen_random_uuid(),$1,$2,'student','Impostor','imp@test.edu','A1')`,
+    [ids.instA, ids.deptA]);
+
+  await db.query(`delete from public.courses where id = any($1)`, [[c1, c2]]);
+}
+
+console.log(`\n\x1b[1mSOFT DELETE vs REFERENTIAL INTEGRITY\x1b[0m`);
+{
+  // The failure this guards against: if unique(id, institution_id) had been made
+  // partial, every composite FK referencing it would have been silently dropped.
+  const cId = crypto.randomUUID(), oId = crypto.randomUUID();
+  await db.query(
+    `insert into public.courses (id, institution_id, department_id, code, title, credits, color)
+       values ($1,$2,$3,'CS998','Doomed',3,'#4C5BD4')`, [cId, ids.instA, ids.deptA]);
+  await db.query(
+    `insert into public.course_offerings (id, institution_id, course_id, term_id, section)
+       values ($1,$2,$3,$4,'Z')`, [oId, ids.instA, cId, ids.termA]);
+
+  await db.query(`update public.courses set deleted_at = now() where id = $1`, [cId]);
+  check('a soft-deleted course keeps its offering attached',
+    await count(`select count(*)::int as n from public.course_offerings where course_id = $1`, [cId]), 1);
+  check('...and the offering still resolves its parent',
+    await count(`select count(*)::int as n from public.course_offerings o join public.courses c
+                   on c.id = o.course_id and c.institution_id = o.institution_id where o.id = $1`, [oId]), 1);
+
+  await expectDenied('...and an offering still cannot point at another college\'s course',
+    `insert into public.course_offerings (id, institution_id, course_id, term_id, section)
+       values (gen_random_uuid(),$1,$2,$3,'Y')`, [ids.instB, cId, ids.termB]);
+
+  await db.query(`delete from public.course_offerings where id = $1`, [oId]);
+  await db.query(`delete from public.courses where id = $1`, [cId]);
+}
+
+console.log(`\n\x1b[1mACCOUNT STATUS — access level, not biography\x1b[0m`);
+{
+  check('everyone starts active',
+    await count(`select count(*)::int as n from public.profiles where status = 'active'`), 6);
+
+  for (const bad of ['deleted', 'graduated', '', 'ACTIVE']) {
+    await expectDenied(`status "${bad}" is rejected`,
+      `update public.profiles set status = $1 where id = $2`, [bad, ids.studA2]);
+  }
+  await expectUnchanged('...and the student is still active',
+    `select status as v from public.profiles where id = $1`, [ids.studA2], 'active');
+
+  // Deactivating changes access, not visibility: the person stays attached to
+  // their work, which is the whole reason profiles carry no deleted_at.
+  await db.query(`update public.profiles set status = 'alumni' where id = $1`, [ids.studA2]);
+  await asUser(ids.profA, async () => {
+    check('an alumnus still appears to their professor',
+      await count(`select count(*)::int as n from public.profiles where id = $1`, [ids.studA2]), 1);
+  });
+  await db.query(`update public.profiles set status = 'active' where id = $1`, [ids.studA2]);
+}
+
+// ============================================================================
 // CATALOGUE INVARIANTS — the rules that must stay true for tables not yet written
 //
 // Everything above tests behaviour that exists. This group tests the SHAPE of
@@ -920,6 +1056,118 @@ console.log(`\n\x1b[1mCATALOGUE INVARIANTS — rules that outlive the tables the
     unmarked.length,
     0,
   );
+}
+
+// --- Soft delete (0007) ----------------------------------------------------
+//
+// Formulated as "the deleted_at column and the hiding policy are the same set".
+// That is stronger than checking one direction: it catches a table that gains
+// deleted_at without the policy (a leak), AND a policy left behind on a table
+// whose column was removed (a lie). Same two-directional shape as the
+// append-only check, for the same reason.
+{
+  const { rows: cols } = await db.query(`
+    select c.relname from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_attribute a on a.attrelid = c.oid and a.attname = 'deleted_at' and a.attnum > 0
+    where n.nspname = 'public' and c.relkind = 'r'
+  `);
+  const { rows: pols } = await db.query(`
+    select c.relname from pg_policy p
+    join pg_class c on c.oid = p.polrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and p.polpermissive = false
+      and pg_get_expr(p.polqual, p.polrelid) like '%deleted_at%'
+  `);
+  const withCol = new Set(cols.map((r) => r.relname));
+  const withPol = new Set(pols.map((r) => r.relname));
+  const unguarded = [...withCol].filter((t) => !withPol.has(t));
+  const orphaned = [...withPol].filter((t) => !withCol.has(t));
+
+  check('at least one table is soft-deletable', withCol.size, 12);
+  check(
+    `every table with deleted_at has a RESTRICTIVE policy filtering it${
+      unguarded.length ? ` (unguarded: ${unguarded.join(', ')})` : ''
+    }`,
+    unguarded.length,
+    0,
+  );
+  check(
+    `...and no hiding policy outlives its column${orphaned.length ? ` (orphaned: ${orphaned.join(', ')})` : ''}`,
+    orphaned.length,
+    0,
+  );
+}
+
+// The tables that must NEVER acquire deleted_at, named individually so that
+// adding one is a deliberate act that fails the build rather than an oversight.
+// DELETION_POLICY.md §2 records why each is excluded.
+{
+  const forbidden = [
+    'grade_history',        // append-only; a nullable timestamp is a delete in disguise
+    'institutions',         // offboarding is export-then-purge
+    'attendance_records',   // an event — you correct a mark, you do not delete it
+    'submissions',          // academic record
+    'submission_files',
+    'submission_grades',
+    'profiles',             // people are deactivated, never hidden
+    'student_academics',
+    'enrolments',           // join rows
+    'teaching_assignments',
+    'team_members',
+    'notifications',        // ephemeral
+    'announcement_reads',
+  ];
+  const { rows } = await db.query(
+    `select c.relname from pg_class c
+     join pg_namespace n on n.oid = c.relnamespace
+     join pg_attribute a on a.attrelid = c.oid and a.attname = 'deleted_at' and a.attnum > 0
+     where n.nspname = 'public' and c.relname = any($1)`,
+    [forbidden],
+  );
+  check(
+    `no excluded table has acquired deleted_at${rows.length ? ` (${rows.map((r) => r.relname).join(', ')})` : ''}`,
+    rows.length,
+    0,
+  );
+}
+
+// A partial unique index cannot be a foreign-key target. Every composite FK in
+// this schema references a unique(id, institution_id), so if one ever became
+// partial, every FK pointing at it would have been silently dropped.
+{
+  const { rows } = await db.query(`
+    select c.relname
+    from pg_index i
+    join pg_class c on c.oid = i.indrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and i.indpred is not null
+      and (select array_agg(a.attname::text order by a.attname)
+             from unnest(i.indkey) k
+             join pg_attribute a on a.attrelid = c.oid and a.attnum = k
+          ) = array['id','institution_id']
+  `);
+  check(
+    `no composite-FK target is partial${rows.length ? ` (${rows.map((r) => r.relname).join(', ')})` : ''}`,
+    rows.length,
+    0,
+  );
+}
+
+// profiles.status must stay a closed set — an unconstrained status column is a
+// login guard waiting to be bypassed by a typo.
+{
+  const { rows } = await db.query(`
+    select pg_get_constraintdef(con.oid) as def
+    from pg_constraint con
+    join pg_class c on c.oid = con.conrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'profiles' and con.contype = 'c'
+      and pg_get_constraintdef(con.oid) like '%status%'
+  `);
+  const def = rows[0]?.def ?? '';
+  check('profiles.status is constrained to the three known values',
+    ['active', 'alumni', 'inactive'].every((v) => def.includes(v)) && rows.length === 1, true);
 }
 
 // --- The audit actor cannot be null (0006) ---------------------------------

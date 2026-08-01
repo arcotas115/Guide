@@ -6,6 +6,7 @@ import {
   type DerivedState,
   type AssignmentStateInput,
 } from '@/lib/assignments/state';
+import { live, type DeletedOption } from '@/lib/soft-delete';
 
 /**
  * Reads for the assignment screens.
@@ -54,8 +55,8 @@ export type StudentAssignment = FacultyAssignment & {
 };
 
 const OFFERING_SELECT = `
-  id, section,
-  courses ( code, title, color, credits ),
+  id, section, deleted_at,
+  courses ( code, title, color, credits, deleted_at ),
   terms ( name )
 ` as const;
 
@@ -92,14 +93,32 @@ function embeddedOffering(row: unknown): OfferingRow | null {
 type OfferingRow = {
   id: string;
   section: string;
-  courses: { code: string; title: string; color: string; credits: number } | null;
+  deleted_at: string | null;
+  courses: {
+    code: string;
+    title: string;
+    color: string;
+    credits: number;
+    deleted_at: string | null;
+  } | null;
   terms: { name: string } | null;
 };
 
-function toOfferingSummary(row: OfferingRow): OfferingSummary | null {
+/**
+ * An offering is only live if BOTH it and its course are. Deleting a course
+ * should take its offerings out of view without needing a second write, and
+ * without leaving an offering that renders a title it can no longer resolve.
+ */
+function toOfferingSummary(
+  row: OfferingRow,
+  options: DeletedOption = {},
+): OfferingSummary | null {
   const course = one(row.courses);
   const term = one(row.terms);
   if (!course) return null;
+  if (!options.includeDeleted && (row.deleted_at || course.deleted_at)) {
+    return null;
+  }
   return {
     offeringId: row.id,
     section: row.section,
@@ -173,7 +192,7 @@ export async function listOfferingsForFaculty(
   return data
     .map(embeddedOffering)
     .filter((r): r is OfferingRow => r !== null)
-    .map(toOfferingSummary)
+    .map((r) => toOfferingSummary(r))
     .filter((r): r is OfferingSummary => r !== null)
     .sort((a, b) => a.courseCode.localeCompare(b.courseCode));
 }
@@ -208,14 +227,17 @@ export async function getOfferingForFaculty(
 export async function listAssignmentsForFaculty(
   profile: CurrentProfile,
   offeringId: string,
+  options: DeletedOption = {},
 ): Promise<FacultyAssignment[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from('assignments')
-    .select(ASSIGNMENT_COLUMNS)
-    .eq('institution_id', profile.institutionId)
-    .eq('offering_id', offeringId)
-    .order('due_at', { ascending: true });
+  const { data, error } = await live(
+    supabase
+      .from('assignments')
+      .select(ASSIGNMENT_COLUMNS)
+      .eq('institution_id', profile.institutionId)
+      .eq('offering_id', offeringId),
+    options,
+  ).order('due_at', { ascending: true });
 
   if (error || !data) return [];
   return (data as unknown as AssignmentRow[]).map(toAssignment);
@@ -278,15 +300,18 @@ export async function getAssignmentForFaculty(
   profile: CurrentProfile,
   offeringId: string,
   assignmentId: string,
+  options: DeletedOption = {},
 ): Promise<FacultyAssignment | null> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from('assignments')
-    .select(ASSIGNMENT_COLUMNS)
-    .eq('institution_id', profile.institutionId)
-    .eq('offering_id', offeringId)
-    .eq('id', assignmentId)
-    .maybeSingle();
+  const { data, error } = await live(
+    supabase
+      .from('assignments')
+      .select(ASSIGNMENT_COLUMNS)
+      .eq('institution_id', profile.institutionId)
+      .eq('offering_id', offeringId)
+      .eq('id', assignmentId),
+    options,
+  ).maybeSingle();
 
   if (error || !data) return null;
   return toAssignment(data as unknown as AssignmentRow);
@@ -311,7 +336,7 @@ export async function listOfferingsForStudent(
   return data
     .map(embeddedOffering)
     .filter((r): r is OfferingRow => r !== null)
-    .map(toOfferingSummary)
+    .map((r) => toOfferingSummary(r))
     .filter((r): r is OfferingSummary => r !== null)
     .sort((a, b) => a.courseCode.localeCompare(b.courseCode));
 }
@@ -363,14 +388,17 @@ export async function listAssignmentsForStudent(
   now: Date = new Date(),
 ): Promise<StudentAssignment[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from('assignments')
-    .select(
-      `${ASSIGNMENT_COLUMNS}, submissions ( submitted_at, submission_grades ( grade, feedback ) )`,
-    )
-    .eq('institution_id', profile.institutionId)
-    .eq('offering_id', offeringId)
-    .order('due_at', { ascending: true });
+  // RLS already hides deleted assignments from a student; live() is what keeps
+  // the same call honest when a member of staff runs it.
+  const { data, error } = await live(
+    supabase
+      .from('assignments')
+      .select(
+        `${ASSIGNMENT_COLUMNS}, submissions ( submitted_at, submission_grades ( grade, feedback ) )`,
+      )
+      .eq('institution_id', profile.institutionId)
+      .eq('offering_id', offeringId),
+  ).order('due_at', { ascending: true });
 
   if (error || !data) return [];
   return (data as unknown as StudentAssignmentRow[]).map((row) =>
@@ -385,15 +413,16 @@ export async function getAssignmentForStudent(
   now: Date = new Date(),
 ): Promise<StudentAssignment | null> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from('assignments')
-    .select(
-      `${ASSIGNMENT_COLUMNS}, submissions ( submitted_at, submission_grades ( grade, feedback ) )`,
-    )
-    .eq('institution_id', profile.institutionId)
-    .eq('offering_id', offeringId)
-    .eq('id', assignmentId)
-    .maybeSingle();
+  const { data, error } = await live(
+    supabase
+      .from('assignments')
+      .select(
+        `${ASSIGNMENT_COLUMNS}, submissions ( submitted_at, submission_grades ( grade, feedback ) )`,
+      )
+      .eq('institution_id', profile.institutionId)
+      .eq('offering_id', offeringId)
+      .eq('id', assignmentId),
+  ).maybeSingle();
 
   if (error || !data) return null;
   return toStudentAssignment(

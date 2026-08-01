@@ -3,6 +3,11 @@ import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { HOME_FOR_ROLE, isRole, type Role } from '@/lib/roles';
 import { DEFAULT_TIME_ZONE } from '@/lib/timezone';
+import {
+  canSignIn,
+  isAccountStatus,
+  type AccountStatus,
+} from '@/lib/account-status';
 
 export type CurrentProfile = {
   id: string;
@@ -20,6 +25,8 @@ export type CurrentProfile = {
    * precisely so a screen cannot forget to ask.
    */
   timeZone: string;
+  /** Access level. See DELETION_POLICY.md §1 — this is not biography. */
+  status: AccountStatus;
 };
 
 /**
@@ -47,7 +54,7 @@ export const getCurrentProfile = cache(async function getCurrentProfile(): Promi
   const { data, error } = await supabase
     .from('profiles')
     .select(
-      'id, institution_id, role, full_name, email, roll_number, institutions(name, min_attendance_pct, timezone)',
+      'id, institution_id, role, full_name, email, roll_number, status, institutions(name, min_attendance_pct, timezone)',
     )
     .eq('id', user.id)
     .single();
@@ -71,13 +78,29 @@ export const getCurrentProfile = cache(async function getCurrentProfile(): Promi
     institutionName: institution?.name ?? 'Campus',
     minAttendancePct: institution?.min_attendance_pct ?? 75,
     timeZone: institution?.timezone ?? DEFAULT_TIME_ZONE,
+    // An unrecognised status is treated as inactive rather than active. A
+    // status column that fails open is not a guard.
+    status: isAccountStatus(data.status) ? data.status : 'inactive',
   };
 });
 
-/** Require a signed-in user; bounce to login otherwise. */
+/**
+ * Require a signed-in user whose account may hold a session.
+ *
+ * The status check lives here rather than only at login, because an account
+ * deactivated at 10am must stop working at 10am — not whenever its owner next
+ * chooses to sign in.
+ *
+ * It redirects to /auth/blocked rather than straight to /login on purpose. The
+ * session cookie is still valid at this point, so sending them to /login would
+ * have the proxy bounce them to "/", which lands back here — an infinite loop.
+ * /auth/blocked is a route handler, so it can actually revoke the session
+ * before forwarding to the message.
+ */
 export async function requireProfile(): Promise<CurrentProfile> {
   const profile = await getCurrentProfile();
   if (!profile) redirect('/login');
+  if (!canSignIn(profile.status)) redirect(`/auth/blocked?reason=${profile.status}`);
   return profile;
 }
 

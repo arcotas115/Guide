@@ -4,6 +4,13 @@ This is the authoritative spec for the Campus app. Read it before building.
 Companion: `BUILD_RULES.md` (operating rules and stack). Where this
 spec and code disagree, this spec wins — update it if requirements change.
 
+**Revision 5 (soft delete, `0007_soft_delete.sql`).** Implements `DELETION_POLICY.md`.
+`profiles.status` (active / alumni / inactive) replaces any notion of deleting a person;
+`deleted_at` lands on the twelve tables a human *creates* and on none of the ones that
+record an *event* or an academic record. Six business-key uniques become partial so a
+retired course code is reusable; roll numbers deliberately are not. Hiding is enforced by
+a RESTRICTIVE RLS policy rather than by queries. Search "Revision 5".
+
 **Revision 4 (tenant integrity, `0006_tenant_integrity.sql`).** Mostly a confirmation:
 the composite-foreign-key convention below was already enforced everywhere (48 of 48
 cross-table FKs), and `authenticated` already held no `TRUNCATE`. What changed is that
@@ -283,6 +290,45 @@ tenant-scoping column. The app speaks standard SQL so the DB can move to dedicat
 Postgres at scale without an app rewrite. Do NOT build sharding/infra now — build the
 shardability now, the shards later.
 
+**SOFT DELETE — `deleted_at`, and where it deliberately is not (Revision 5).**
+
+`deleted_at timestamptz null` is on the twelve tables that hold a thing **a human
+created**, and which they can therefore create by mistake:
+`departments` · `terms` · `courses` · `course_offerings` · `assignments` ·
+`announcements` · `materials` · `team_sets` · `teams` · `placement_drives` ·
+`companies` · `attendance_sessions`
+
+**It is deliberately absent from the rest, and the reasons matter — nobody should add one
+later thinking it was an oversight:**
+
+| Table | Why not |
+|---|---|
+| `grade_history` | Append-only. A nullable timestamp anyone can set is a delete wearing a different hat. Not a judgement call. |
+| `institutions` | Offboarding is export-then-purge, not a hidden row. |
+| `attendance_records` | An event. You *correct* a mark; you do not delete it. |
+| `submissions`, `submission_files`, `submission_grades` | Academic record. Removing a student's work is an erasure question, answered by anonymising the person. |
+| `profiles`, `student_academics` | People are deactivated, never hidden — see `status` above. |
+| `enrolments`, `teaching_assignments`, `team_members` | Join rows. `team_members` already hard-deletes on "leave team", which is correct. |
+| `notifications`, `announcement_reads` | Ephemeral. Hard delete is fine. |
+
+- **Hiding is enforced in RLS, not in queries.** Each soft-deletable table carries a
+  RESTRICTIVE policy `deleted_at is null or is_staff()`, which is ANDed with its existing
+  permissive policies. So a forgotten `where` clause cannot leak a hidden row to a
+  student, and staff keep read access because otherwise nothing could ever be undeleted.
+  Deleting is an UPDATE, already covered by the existing write policies — there are no
+  delete policies and none are needed.
+- **Reads go through `live()`** (`src/lib/soft-delete.ts`), which applies
+  `deleted_at is null` by default, so seeing hidden rows is something a call site asks
+  for rather than something it gets by forgetting.
+- **Six business keys became partial** (`where deleted_at is null`), so the value is
+  reusable once the row is hidden: `courses (institution_id, code)`,
+  `departments (institution_id, code)`, `terms (institution_id, name)`,
+  `course_offerings (course_id, term_id, section)`,
+  `attendance_sessions (offering_id, held_on)`, `companies (institution_id, name)`.
+  **No `unique (id, institution_id)` key may ever become partial** — a partial index
+  cannot be a foreign-key target, and those keys are what every composite FK references.
+  Asserted by a catalogue test, and Postgres itself refuses the drop.
+
 **COMPOSITE FOREIGN KEYS — how rule 4 is enforced rather than intended (Revision 4).**
 BUILD_RULES rule 4 says no foreign key crosses an institution boundary. That is a
 property the database enforces here, not a convention reviewers watch for:
@@ -332,7 +378,21 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
 - **departments**(id, institution_id, name, code) — unique(institution_id, code)
 - **profiles**(id = auth.users.id, institution_id, department_id?, role
   check in ('student','faculty','admin','placement_officer'), full_name, email,
-  roll_number?, batch_year?) — unique(institution_id, roll_number)
+  roll_number?, batch_year?, status text not null default 'active'
+  check in ('active','alumni','inactive')) — unique(institution_id, roll_number)
+  — **`status` is access level, not biography (Revision 5).** `active` = full access;
+    `alumni` = may sign in, read-only, own historical records (the surface itself is
+    deferred — the login guard refuses alumni for now, with its own warm message);
+    `inactive` = may not sign in. A retired professor the college wants kept out is
+    `inactive`; one they are happy to let browse old courses is `alumni`.
+  — **profiles NEVER get `deleted_at` (Revision 5).** Hiding a person leaves holes
+    wherever their name sits beside their work — a submissions list with a mark and no
+    student attached. Erasure is handled by ANONYMISING the profile (name, email, resume)
+    while the academic record stays, not by deleting the row. See DELETION_POLICY.md §3.
+  — **The roll-number unique is deliberately NOT partial.** A roll number is issued once
+    and held for all time; reusing one while the previous holder's grades exist would let
+    one person's marks surface under another's name.
+  — index(institution_id, status) — every roster query filters on that pair.
 - **student_academics**(student_id pk → profiles, cgpa numeric(4,2), backlogs int
   default 0, batch_year int, resume_url?, updated_at)
 

@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { createClient } from '@/lib/supabase/server';
 import { HOME_FOR_ROLE, isRole } from '@/lib/roles';
+import { blockedMessage, isAccountStatus } from '@/lib/account-status';
 
 /**
  * "Validate at the door" (BUILD_RULES.md). Nothing from the form is trusted; it
@@ -61,7 +62,7 @@ export async function login(
   // RLS applies. `.single()` on their own id — one tenant, one row.
   const { data: profile } = await supabase
     .from('profiles')
-    .select('role')
+    .select('role, status')
     .eq('id', data.user.id)
     .single();
 
@@ -76,6 +77,18 @@ export async function login(
       error:
         'Your account is not set up for any institution yet. Contact your admin.',
     };
+  }
+
+  // Access level, checked after identity. An unrecognised status is treated as
+  // inactive — a guard that fails open is not a guard.
+  const status = isAccountStatus(profile.status) ? profile.status : 'inactive';
+  const blocked = blockedMessage(status);
+  if (blocked) {
+    // The credentials were correct, so a session now exists. End it before
+    // returning, or the browser holds a session for an account that may not
+    // sign in.
+    await supabase.auth.signOut();
+    return { error: blocked };
   }
 
   // redirect() works by throwing, so it must sit outside any try/catch.
