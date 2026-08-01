@@ -4,6 +4,14 @@ This is the authoritative spec for the Campus app. Read it before building.
 Companion: `BUILD_RULES.md` (operating rules and stack). Where this
 spec and code disagree, this spec wins — update it if requirements change.
 
+**Revision 4 (tenant integrity, `0006_tenant_integrity.sql`).** Mostly a confirmation:
+the composite-foreign-key convention below was already enforced everywhere (48 of 48
+cross-table FKs), and `authenticated` already held no `TRUNCATE`. What changed is that
+both are now asserted by catalogue tests rather than by convention, the audit actor
+became `NOT NULL`, `grade_history.changed_at` moved to `clock_timestamp()`, and
+append-only tables declare themselves with an `@append-only` comment token instead of
+appearing in a hand-maintained list. Search "Revision 4".
+
 **Revision 3 (foundations migration, `0005_foundations.sql`).** Four changes, all made
 before real grade data existed: (1) `institutions.timezone` — every timestamp the app
 renders now resolves through the institution, never through a constant; (2) audit
@@ -275,6 +283,33 @@ tenant-scoping column. The app speaks standard SQL so the DB can move to dedicat
 Postgres at scale without an app rewrite. Do NOT build sharding/infra now — build the
 shardability now, the shards later.
 
+**COMPOSITE FOREIGN KEYS — how rule 4 is enforced rather than intended (Revision 4).**
+BUILD_RULES rule 4 says no foreign key crosses an institution boundary. That is a
+property the database enforces here, not a convention reviewers watch for:
+
+- Every parent table carries a redundant `unique (id, institution_id)`. Redundant on its
+  own — `id` is already the primary key — and it exists solely so children can reference
+  the pair.
+- Every foreign key **between two tables that both carry `institution_id`** is composite:
+  `foreign key (parent_id, institution_id) references parent (id, institution_id)`. That
+  makes a child row pointing at another institution's parent unrepresentable, rather than
+  merely discouraged.
+- **Two deliberate exemptions.** `<table>.institution_id → institutions(id)` is
+  single-column because `institutions` has no `institution_id` — it *is* the tenant. And
+  `profiles.id → auth.users(id)` crosses into Supabase's auth schema, which has no tenant
+  column; that is the identity edge BUILD_RULES rule 6 allows Supabase to own.
+- **A new table must follow this.** `supabase/tests/rls.test.mjs` asserts the invariant
+  against the catalogue, so a single-column FK between two tenant-scoped tables fails the
+  build. The cost is ~20 extra unique indexes, paid on write; it was paid in 0001 and is
+  the standard price of declarative tenant integrity.
+
+**APPEND-ONLY TABLES (Revision 4).** A table that must never be updated or deleted from
+declares itself by carrying the literal token `@append-only` in its table comment.
+`0003_grants.sql` reads the catalogue for that token and revokes write grants, so the
+list is never hand-maintained — the previous hand-written array would have silently
+re-granted UPDATE on any table someone forgot to add. The test asserts the marker and the
+policies agree in both directions.
+
 Every domain table has `institution_id uuid not null references institutions(id)` and
 RLS enabled with policies keyed off the requesting user's profile. Timestamps
 (`created_at timestamptz not null default now()`) on everything. IDs are uuid default
@@ -381,7 +416,11 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
 
 - **submission_grades**(submission_id pk → submissions, grade numeric(6,2) not null,
   feedback text?, graded_by → profiles, graded_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(), updated_by? → profiles)
+  updated_at timestamptz not null default now(), updated_by **not null** → profiles)
+  — **`updated_by` is NOT NULL** (Revision 4). An audit trail that cannot say who
+    changed a grade is not an audit trail. Enforced on the column rather than by a
+    RAISE in the trigger, so it is declarative, visible in a schema dump, and covers
+    write paths the trigger never sees.
   — **`graded_by` vs `updated_by`** (Revision 3). `graded_by` is who FIRST marked it;
     `updated_by` is who LAST changed it. On a post-publish correction those are
     frequently different people, and that difference is the whole point of having both.
@@ -406,8 +445,15 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
     indexed (see RLS notes below).
 - **grade_history**(id, institution_id, submission_id → submissions,
   old_grade numeric(6,2)?, new_grade numeric(6,2) not null,
-  old_feedback text?, new_feedback text?, changed_by? → profiles,
-  changed_at timestamptz not null default now())
+  old_feedback text?, new_feedback text?, changed_by **not null** → profiles,
+  changed_at timestamptz not null default clock_timestamp())
+  — **`clock_timestamp()`, not `now()`** (Revision 4). `now()` is
+    `transaction_timestamp()` and is constant for a whole transaction, so a bulk grade
+    save would write every history row with an identical timestamp and no way to say
+    which correction came first. Measured: three inserts in one transaction produced one
+    distinct `now()` and three distinct `clock_timestamp()`. It is still not a guaranteed
+    total order, so the `id` tiebreak on the index stays — `clock_timestamp` makes the
+    ordering meaningful, the tiebreak makes it deterministic.
   — **APPEND-ONLY, AND WRITTEN BY A TRIGGER** (Revision 3). Not by the application: an
     audit log the app is trusted to write is an audit log that stops being written the
     first time someone adds a code path and forgets — and that code path is exactly the

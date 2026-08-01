@@ -88,23 +88,39 @@ grant execute on all functions in schema public
 --
 -- Section 2 grants UPDATE and DELETE on ALL tables, which would quietly undo
 -- append-only every time this file is re-run. That is precisely the failure
--- mode this file's own "re-run me after adding a table" instruction would
--- cause, so the exceptions are listed here rather than left to memory.
+-- mode this file's own "re-run me after adding a table" instruction causes.
 --
--- RLS already denies these (no UPDATE or DELETE policy exists on
--- grade_history), so this is the second lock, not the only one. Both, because
--- an audit log is worth two.
+-- THE LIST IS NOT WRITTEN HERE. It was, and that was the bug waiting to happen:
+-- add an append-only table, forget to add its name, and the next re-run of this
+-- file silently makes UPDATE and DELETE possible again. Nothing errors.
+--
+-- Instead each table declares itself, by carrying the literal token
+-- `@append-only` in its COMMENT (see 0006 for why a comment rather than a
+-- registry table or a policy-shape heuristic). This loop reads the catalogue, so
+-- a new append-only table is covered the moment it is commented, and the
+-- catalogue test asserts the marker and the policies agree in both directions.
+--
+-- RLS already denies these writes — no UPDATE or DELETE policy exists on such a
+-- table — so this is the second lock, not the only one. Both, because an audit
+-- log is worth two.
 -- ---------------------------------------------------------------------------
 do $$
-declare t text;
+declare t record;
 begin
-  foreach t in array array['grade_history']
+  for t in
+    select c.relname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'r'
+      and coalesce(obj_description(c.oid, 'pg_class'), '') like '%@append-only%'
   loop
-    if to_regclass('public.' || t) is not null then
-      execute format(
-        'revoke update, delete on public.%I from authenticated, service_role', t);
-      execute format('revoke insert on public.%I from authenticated', t);
-    end if;
+    execute format(
+      'revoke update, delete on public.%I from authenticated, service_role',
+      t.relname);
+    -- No client INSERT either: these tables are written by SECURITY DEFINER
+    -- triggers, and a grant here would let a client forge rows.
+    execute format('revoke insert on public.%I from authenticated', t.relname);
   end loop;
 end $$;
 

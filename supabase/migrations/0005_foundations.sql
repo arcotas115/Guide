@@ -149,8 +149,11 @@ create index if not exists grade_history_submission_idx
 create index if not exists grade_history_institution_idx
   on public.grade_history (institution_id);
 
+-- The `@append-only` token is machine-readable: 0003 reads it from the catalogue
+-- to decide which tables must not receive UPDATE/DELETE grants, so the list is
+-- never hand-maintained. See 0006 for why a comment rather than a registry.
 comment on table public.grade_history is
-  'Append-only. Written only by the trigger on submission_grades; no role may UPDATE or DELETE. Students may never read it, published or not.';
+  '@append-only Written only by the trigger on submission_grades; no role may UPDATE or DELETE. Students may never read it, published or not.';
 
 
 -- ----------------------------------------------------------------------------

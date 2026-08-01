@@ -430,6 +430,10 @@ async function seedAssignments(ctx: {
       feedback:
         'Clean semaphore usage and the starvation argument is correct. Mark the critical section boundaries more explicitly next time.',
       graded_by: ctx.professorId,
+      // NOT NULL since 0006. graded_by is who FIRST marked it; updated_by is who
+      // LAST changed it, and for a grade that has never been revised those are
+      // the same person. The trigger reads this to attribute the history row.
+      updated_by: ctx.professorId,
     },
     { onConflict: 'submission_id' },
   );

@@ -44,10 +44,12 @@ await db.exec(migration('0002_rls_policies.sql'));
 await db.exec(migration('0003_grants.sql'));
 await db.exec(migration('0004_assignment_fields_and_grade_split.sql'));
 await db.exec(migration('0005_foundations.sql'));
-// Both 0004 and 0005 create a table, so 0003's ON ALL TABLES snapshot is stale
-// — exactly the re-run those migrations' headers tell you to do. Doing it here
-// means the suite fails if that instruction is ever wrong, and it proves the
-// re-run does not re-grant UPDATE on the append-only table.
+await db.exec(migration('0006_tenant_integrity.sql'));
+// 0004 and 0005 create tables, so 0003's ON ALL TABLES snapshot is stale —
+// exactly the re-run those migrations' headers tell you to do. Running it LAST,
+// after every table exists and is commented, proves two things at once: that the
+// instruction is right, and that a re-run does not re-grant UPDATE on an
+// append-only table now that the list derives itself from the catalogue.
 await db.exec(migration('0003_grants.sql'));
 
 // --- Test harness -----------------------------------------------------------
@@ -394,8 +396,8 @@ console.log(`\n\x1b[1mSUBMISSION_GRADES — graded is not the same as published\
     [subId, ids.instA, ids.asgOpen, ids.studA1],
   );
   await db.query(
-    `insert into public.submission_grades (submission_id, institution_id, grade, feedback, graded_by)
-       values ($1,$2,17.5,'Good analysis of the scheduler trace.',$3)`,
+    `insert into public.submission_grades (submission_id, institution_id, grade, feedback, graded_by, updated_by)
+       values ($1,$2,17.5,'Good analysis of the scheduler trace.',$3,$3)`,
     [subId, ids.instA, ids.profA],
   );
 
@@ -728,6 +730,233 @@ console.log(`\n\x1b[1mLEFTOVERS FROM 1A — the database now agrees with zod\x1b
   check('allow_multiple_attempts defaults to true',
     (await db.query(`select allow_multiple_attempts as v from public.assignments where id = $1`, [ids.asgOpen])).rows[0].v,
     true);
+}
+
+// ============================================================================
+// CATALOGUE INVARIANTS — the rules that must stay true for tables not yet written
+//
+// Everything above tests behaviour that exists. This group tests the SHAPE of
+// the schema, so that table 32 cannot quietly opt out of a load-bearing rule
+// three months from now. These are the assertions that keep working while
+// nobody is looking.
+// ============================================================================
+console.log(`\n\x1b[1mCATALOGUE INVARIANTS — rules that outlive the tables they were written for\x1b[0m`);
+
+// --- Rule 4: no foreign key crosses an institution boundary ----------------
+//
+// Stated declaratively: if BOTH tables carry institution_id, the FK between
+// them must include it on both sides. Without this test, a new table can be
+// added with a single-column FK and nothing complains until two tenants'
+// rows point at each other.
+{
+  const { rows } = await db.query(`
+    with tenant_tables as (
+      select c.oid, c.relname
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      join pg_attribute a on a.attrelid = c.oid
+                         and a.attname = 'institution_id' and a.attnum > 0
+      where n.nspname = 'public' and c.relkind = 'r'
+    )
+    select con.conname, ct.relname as child, pt.relname as parent
+    from pg_constraint con
+    join tenant_tables ct on ct.oid = con.conrelid
+    join tenant_tables pt on pt.oid = con.confrelid
+    where con.contype = 'f'
+      and not exists (
+        select 1 from unnest(con.conkey) k
+        join pg_attribute a on a.attrelid = con.conrelid and a.attnum = k
+        where a.attname = 'institution_id'
+      )
+  `);
+  check(
+    `every FK between two tenant-scoped tables includes institution_id${
+      rows.length ? ` (offenders: ${rows.map((r) => `${r.child}.${r.conname}`).join(', ')})` : ''
+    }`,
+    rows.length,
+    0,
+  );
+
+  // ...and the referenced side must be the composite key, not just the pk.
+  const { rows: parents } = await db.query(`
+    select count(*)::int as n
+    from pg_constraint con
+    join pg_class c on c.oid = con.conrelid
+    join pg_namespace nsp on nsp.oid = c.relnamespace
+    where con.contype = 'f' and nsp.nspname = 'public'
+      and array_length(con.confkey, 1) = 2
+  `);
+  check('...and a healthy number of them are composite', parents[0].n > 30, true);
+}
+
+// The two documented exemptions, asserted so nobody "fixes" them later.
+// institutions IS the tenant, so it has no institution_id to pair with; and
+// profiles.id -> auth.users crosses into Supabase's schema, which BUILD_RULES
+// rule 6 explicitly allows Supabase to own.
+{
+  const { rows } = await db.query(`
+    select count(*)::int as n from pg_constraint con
+    join pg_class c on c.oid = con.conrelid
+    join pg_class p on p.oid = con.confrelid
+    where con.contype = 'f' and p.relname = 'institutions'
+      and array_length(con.conkey, 1) = 1
+  `);
+  check('institution_id -> institutions stays single-column (it IS the tenant)', rows[0].n > 20, true);
+}
+
+// --- No table may be reachable without RLS ---------------------------------
+{
+  const { rows } = await db.query(`
+    select c.relname from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity
+  `);
+  check(
+    `every table has RLS enabled${rows.length ? ` (missing: ${rows.map((r) => r.relname).join(', ')})` : ''}`,
+    rows.length,
+    0,
+  );
+}
+
+// --- Grants: the GRANT ALL fingerprint must not appear ---------------------
+//
+// TRUNCATE is the one that matters. It ignores RLS entirely — it is a
+// table-level operation, so a single statement would empty a table across every
+// tenant at once. It is not reachable through PostgREST today, which makes this
+// a wall with a spare door rather than an open one; grants exist so that a
+// mistake in the inner room is not fatal.
+{
+  const { rows } = await db.query(`
+    select grantee, privilege_type, count(*)::int as tables
+    from information_schema.role_table_grants
+    where grantee in ('authenticated','anon','service_role')
+      and table_schema = 'public'
+      and privilege_type in ('TRUNCATE','TRIGGER','REFERENCES')
+    group by grantee, privilege_type
+  `);
+  check(
+    `no client role holds TRUNCATE, TRIGGER or REFERENCES${
+      rows.length ? ` (${rows.map((r) => `${r.grantee}:${r.privilege_type}×${r.tables}`).join(', ')})` : ''
+    }`,
+    rows.length,
+    0,
+  );
+
+  const { rows: anonRows } = await db.query(`
+    select count(*)::int as n from information_schema.role_table_grants
+    where grantee = 'anon' and table_schema = 'public'
+  `);
+  check('anon holds no table privilege of any kind', anonRows[0].n, 0);
+}
+
+// --- Append-only, asserted in BOTH directions ------------------------------
+//
+// One direction alone is not enough. "Marked tables have no write policies"
+// misses a table someone forgot to mark; "tables with no write policies are
+// marked" misses a marked table that later grew an UPDATE policy. Both, so
+// neither half can rot.
+{
+  const { rows: marked } = await db.query(`
+    select c.relname from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind = 'r'
+      and coalesce(obj_description(c.oid,'pg_class'),'') like '%@append-only%'
+  `);
+  check('at least one table declares itself append-only', marked.length > 0, true);
+
+  // Direction 1: marked => no write grant, no write policy.
+  const { rows: leaks } = await db.query(`
+    select c.relname, g.grantee, g.privilege_type
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    join information_schema.role_table_grants g
+      on g.table_name = c.relname and g.table_schema = 'public'
+    where n.nspname = 'public' and c.relkind = 'r'
+      and coalesce(obj_description(c.oid,'pg_class'),'') like '%@append-only%'
+      and g.grantee in ('authenticated','anon')
+      and g.privilege_type in ('UPDATE','DELETE','INSERT','TRUNCATE')
+  `);
+  check(
+    `an append-only table grants no client write${
+      leaks.length ? ` (${leaks.map((r) => `${r.relname}:${r.grantee}:${r.privilege_type}`).join(', ')})` : ''
+    }`,
+    leaks.length,
+    0,
+  );
+
+  const { rows: policies } = await db.query(`
+    select c.relname, p.polname
+    from pg_policy p
+    join pg_class c on c.oid = p.polrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and coalesce(obj_description(c.oid,'pg_class'),'') like '%@append-only%'
+      and p.polcmd in ('w','d','a','*')
+  `);
+  check(
+    `an append-only table has no INSERT/UPDATE/DELETE policy${
+      policies.length ? ` (${policies.map((r) => `${r.relname}.${r.polname}`).join(', ')})` : ''
+    }`,
+    policies.length,
+    0,
+  );
+
+  // Direction 2: a table with SELECT policies but no write policies at all is
+  // almost certainly append-only and unmarked. Flag it so somebody decides,
+  // rather than letting the next 0003 re-run hand it UPDATE.
+  const { rows: unmarked } = await db.query(`
+    select c.relname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity
+      and coalesce(obj_description(c.oid,'pg_class'),'') not like '%@append-only%'
+      and exists (select 1 from pg_policy p where p.polrelid = c.oid and p.polcmd = 'r')
+      and not exists (select 1 from pg_policy p where p.polrelid = c.oid and p.polcmd in ('w','d','a','*'))
+  `);
+  check(
+    `no table is append-only by accident — mark it or give it a write policy${
+      unmarked.length ? ` (unmarked: ${unmarked.map((r) => r.relname).join(', ')})` : ''
+    }`,
+    unmarked.length,
+    0,
+  );
+}
+
+// --- The audit actor cannot be null (0006) ---------------------------------
+{
+  const { rows } = await db.query(`
+    select a.attname, a.attnotnull
+    from pg_attribute a
+    join pg_class c on c.oid = a.attrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and ((c.relname = 'submission_grades' and a.attname = 'updated_by')
+        or (c.relname = 'grade_history'     and a.attname = 'changed_by'))
+  `);
+  for (const r of rows) {
+    check(`${r.attname} is NOT NULL — an audit row must say who`, r.attnotnull, true);
+  }
+}
+
+await expectDenied(
+  'a grade cannot be saved without naming who saved it',
+  `insert into public.submission_grades (submission_id, institution_id, grade, graded_by)
+     select id, institution_id, 5, null from public.submissions limit 1`,
+);
+
+// changed_at must advance within a transaction, or a bulk grade save leaves
+// every history row tied and unorderable.
+{
+  const { rows } = await db.query(`
+    select pg_get_expr(d.adbin, d.adrelid) as def
+    from pg_attrdef d
+    join pg_class c on c.oid = d.adrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_attribute a on a.attrelid = c.oid and a.attnum = d.adnum
+    where n.nspname = 'public' and c.relname = 'grade_history' and a.attname = 'changed_at'
+  `);
+  check('grade_history.changed_at uses clock_timestamp(), not now()',
+    String(rows[0]?.def).includes('clock_timestamp'), true);
 }
 
 // ============================================================================
