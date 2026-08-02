@@ -126,6 +126,44 @@ end $$;
 
 
 -- ---------------------------------------------------------------------------
+-- 4c. Function-written tables — the OTHER exception to section 2
+--
+-- Distinct from @append-only, and the difference is who may still write:
+--
+--   @append-only      nobody, ever, including service_role. An audit log.
+--   @function-written no CLIENT may write; a SECURITY DEFINER function does,
+--                     and service_role keeps full access for seeds and repairs.
+--
+-- submissions, submission_attempts and submission_files are the latter. A
+-- student hands work in through submit_attempt(), which checks the deadline,
+-- the attempt policy and the attempt number — none of which a policy can
+-- express. Leaving them a client INSERT grant would reopen the hole that
+-- function exists to close: appending an item to an assignment that closed
+-- weeks ago.
+--
+-- THIS IS WHY IT IS HERE rather than only in 0009. Section 2 grants INSERT on
+-- ALL tables, so re-running this file — which its own header tells you to do —
+-- would hand the grant straight back. Caught by the test suite doing exactly
+-- that re-run.
+-- ---------------------------------------------------------------------------
+do $$
+declare t record;
+begin
+  for t in
+    select c.relname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'r'
+      and coalesce(obj_description(c.oid, 'pg_class'), '') like '%@function-written%'
+  loop
+    execute format(
+      'revoke insert, update, delete on public.%I from authenticated', t.relname);
+  end loop;
+end $$;
+
+
+-- ---------------------------------------------------------------------------
 -- 5. anon stays shut
 --    There is no signed-out surface in this product: every screen is behind a
 --    login. Re-stated here (0002 does it too) so that this file alone is a

@@ -8,6 +8,10 @@ import {
 import { CourseHeader } from '@/components/student/course-header';
 import { Card, Eyebrow } from '@/components/kit/surfaces';
 import { formatDateTime } from '@/lib/format';
+import { getSubmissionForStudent } from '@/lib/submissions/queries';
+import { SubmitPanel } from '@/components/student/submit-panel';
+import { YourSubmissions } from '@/components/student/your-submissions';
+import { submitAttempt } from './actions';
 
 export const metadata: Metadata = { title: 'Assignment · Campus' };
 
@@ -35,6 +39,14 @@ export default async function StudentAssignmentPage({
 
   const { derived } = assignment;
   const tz = profile.timeZone;
+
+  // Late-ness is computed against the assignment's CURRENT due_at, so this
+  // re-reads it on every render rather than trusting a stored flag.
+  const submission = await getSubmissionForStudent(
+    profile,
+    assignmentId,
+    assignment.dueAt,
+  );
 
   return (
     <>
@@ -141,11 +153,35 @@ export default async function StudentAssignmentPage({
           </Card>
         </section>
 
-        {/* No submission UI this session — that is the next step. Saying so
-            beats a disabled button with no explanation. */}
-        <p className="text-ink-faint mt-5 px-1 text-[12.5px] leading-relaxed">
-          Handing work in from your phone arrives in the next update.
-        </p>
+        {submission ? (
+          <YourSubmissions
+            submission={submission}
+            timeZone={tz}
+            allowMultiple={assignment.allowMultipleAttempts}
+            professorName={null}
+          />
+        ) : null}
+
+        {derived.canSubmit ? (
+          <SubmitPanel
+            assignmentId={assignmentId}
+            institutionId={profile.institutionId}
+            ownerId={profile.id}
+            nextAttempt={(submission?.latestAttempt ?? 0) + 1}
+            accept={{
+              file: assignment.acceptFile,
+              link: assignment.acceptLink,
+              text: assignment.acceptText,
+            }}
+            allowMultiple={assignment.allowMultipleAttempts}
+            hasSubmitted={submission !== null}
+            onSubmit={submitAttempt}
+          />
+        ) : submission === null ? (
+          <p className="text-ink-faint mt-5 px-1 text-[12.5px] leading-relaxed">
+            This assignment is not accepting submissions right now.
+          </p>
+        ) : null}
       </div>
     </>
   );

@@ -39,6 +39,56 @@ await db.exec(`
   create role service_role bypassrls;
 `);
 
+// --- storage shim -----------------------------------------------------------
+//
+// PGlite has no `storage` schema, so the most security-critical thing in 1B-i
+// would otherwise be the one thing this suite cannot test. This recreates the
+// surface 0010 touches — buckets, objects, and foldername() — so the POLICY
+// EXPRESSIONS run for real.
+//
+// WHAT THIS DOES NOT TEST, stated plainly: Supabase's own enforcement. The real
+// storage API decides whether a given request is even routed to these policies,
+// and this shim cannot speak to that. What it does test is the expressions —
+// which segment is compared, in which order, against which id — and that is
+// where the off-by-one lives.
+//
+// foldername() mirrors Supabase's: the path segments EXCLUDING the filename,
+// 1-indexed. If that ever diverges, every path assertion below is meaningless,
+// so the indexing itself is asserted before anything else uses it.
+await db.exec(`
+  create schema if not exists storage;
+  create table storage.buckets (
+    id text primary key,
+    name text,
+    public boolean not null default false,
+    file_size_limit bigint,
+    created_at timestamptz not null default now()
+  );
+  create table storage.objects (
+    id uuid primary key default gen_random_uuid(),
+    bucket_id text not null references storage.buckets (id),
+    name text not null,
+    owner uuid,
+    metadata jsonb,
+    created_at timestamptz not null default now()
+  );
+  alter table storage.objects enable row level security;
+  -- Real Supabase grants schema usage to both roles; without it every query
+  -- below fails with "permission denied for schema storage" rather than
+  -- exercising the policies.
+  grant usage on schema storage to authenticated, service_role;
+  grant select, insert on storage.objects to authenticated;
+  grant all on storage.objects to service_role;
+  grant select, insert, update on storage.buckets to service_role;
+
+  create or replace function storage.foldername(name text)
+  returns text[] language sql immutable as $fn$
+    select (string_to_array(name, '/'))[
+      1 : greatest(array_length(string_to_array(name, '/'), 1) - 1, 0)
+    ]
+  $fn$;
+`);
+
 await db.exec(migration('0001_init_schema.sql'));
 await db.exec(migration('0002_rls_policies.sql'));
 await db.exec(migration('0003_grants.sql'));
@@ -47,6 +97,8 @@ await db.exec(migration('0005_foundations.sql'));
 await db.exec(migration('0006_tenant_integrity.sql'));
 await db.exec(migration('0007_soft_delete.sql'));
 await db.exec(migration('0008_soft_delete_cascade.sql'));
+await db.exec(migration('0009_submit_attempts.sql'));
+await db.exec(migration('0010_storage.sql'));
 // 0004 and 0005 create tables, so 0003's ON ALL TABLES snapshot is stale —
 // exactly the re-run those migrations' headers tell you to do. Running it LAST,
 // after every table exists and is commented, proves two things at once: that the
@@ -999,6 +1051,293 @@ console.log(`\n\x1b[1mACCOUNT STATUS — access level, not biography\x1b[0m`);
 }
 
 // ============================================================================
+// SUBMITTING (0009) — the three holes, closed
+// ============================================================================
+console.log(`\n\x1b[1mSUBMITTING — one way in, and it checks the deadline\x1b[0m`);
+{
+  const submitAs = (who, assignmentId, items) =>
+    asUser(who, async () => {
+      try {
+        const { rows } = await db.query(
+          `select public.submit_attempt($1, $2::jsonb) as r`,
+          [assignmentId, JSON.stringify(items)],
+        );
+        return { ok: true, result: rows[0].r };
+      } catch (e) {
+        return { ok: false, message: String(e.message) };
+      }
+    });
+  const TEXT = [{ kind: 'text', text_body: 'my answer' }];
+
+  // asgOpen is open with a due date in the past (2026-07-28) — so this is also
+  // the late path. asgDraft is a draft.
+  const first = await submitAs(ids.studA1, ids.asgOpen, TEXT);
+  check('a student can submit', first.ok, true);
+  check('...as attempt 1', first.result?.attempt, 1);
+  check('...with a server-set timestamp', typeof first.result?.submitted_at, 'string');
+
+  const second = await submitAs(ids.studA1, ids.asgOpen, TEXT);
+  check('HOLE (a) CLOSED: a student can now resubmit', second.ok, true);
+  check('...as attempt 2', second.result?.attempt, 2);
+  check('...and attempt 1 still exists — nothing is destroyed on resubmit',
+    await count(`select count(*)::int as n from public.submission_attempts sa
+                   join public.submissions s on s.id = sa.submission_id
+                  where s.assignment_id = $1 and s.student_id = $2`,
+      [ids.asgOpen, ids.studA1]), 2);
+  check('...and both attempts\' items survive',
+    await count(`select count(*)::int as n from public.submission_files sf
+                   join public.submissions s on s.id = sf.submission_id
+                  where s.assignment_id = $1 and s.student_id = $2`,
+      [ids.asgOpen, ids.studA1]), 2);
+  check('...latest_attempt matches max(attempt), so the cache has not drifted',
+    await count(`select count(*)::int as n from public.submissions s
+                  where s.latest_attempt <> (select max(attempt) from public.submission_attempts
+                                              where submission_id = s.id)`), 0);
+
+  // HOLE (c): the deadline must be enforced on the RESUBMISSION path too.
+  await db.query(`update public.assignments set status = 'closed' where id = $1`, [ids.asgOpen]);
+  const afterClose = await submitAs(ids.studA1, ids.asgOpen, TEXT);
+  check('HOLE (c) CLOSED: no appending to a closed assignment', afterClose.ok, false);
+  check('...with a message a student can act on',
+    afterClose.message?.includes('not open for submissions'), true);
+  await db.query(`update public.assignments set status = 'open' where id = $1`, [ids.asgOpen]);
+
+  // ...and the raw path is gone entirely, which is what makes it CLOSED rather
+  // than narrowed.
+  await asUser(ids.studA1, async () => {
+    await expectDenied('...and the raw INSERT path no longer exists at all',
+      `insert into public.submission_files (institution_id, submission_id, attempt, kind, text_body)
+         select $1, id, 99, 'text', 'snuck in' from public.submissions
+          where assignment_id = $2 and student_id = $3`,
+      [ids.instA, ids.asgOpen, ids.studA1]);
+  });
+
+  // Draft, not-yet-open, and the late window.
+  const draft = await submitAs(ids.studA1, ids.asgDraft, TEXT);
+  check('a draft assignment refuses submissions', draft.ok, false);
+
+  {
+    const futureId = crypto.randomUUID();
+    await db.query(
+      `insert into public.assignments (id, institution_id, offering_id, created_by, title, marks, opens_at, due_at, status)
+         values ($1,$2,$3,$4,'Opens later',10, now() + interval '7 days', now() + interval '14 days','open')`,
+      [futureId, ids.instA, ids.offerA, ids.profA]);
+    const notYet = await submitAs(ids.studA1, futureId, TEXT);
+    check('a not-yet-open assignment refuses submissions', notYet.ok, false);
+    check('...saying so', notYet.message?.includes('has not opened yet'), true);
+
+    // Past the late window.
+    await db.query(
+      `update public.assignments set opens_at = now() - interval '30 days',
+              due_at = now() - interval '10 days', allow_late = true,
+              late_until = now() - interval '2 days' where id = $1`, [futureId]);
+    const tooLate = await submitAs(ids.studA1, futureId, TEXT);
+    check('a closed late window refuses submissions', tooLate.ok, false);
+    check('...saying so', tooLate.message?.includes('late window'), true);
+
+    // allow_late = false, past due.
+    await db.query(
+      `update public.assignments set allow_late = false, late_until = null where id = $1`, [futureId]);
+    const noLate = await submitAs(ids.studA1, futureId, TEXT);
+    check('past due with late work refused says exactly that',
+      noLate.message?.includes('late work is not accepted'), true);
+
+    // One attempt only.
+    await db.query(
+      `update public.assignments set due_at = now() + interval '5 days',
+              allow_multiple_attempts = false where id = $1`, [futureId]);
+    const once = await submitAs(ids.studA1, futureId, TEXT);
+    check('a single-attempt assignment accepts the first', once.ok, true);
+    const twice = await submitAs(ids.studA1, futureId, TEXT);
+    check('...and refuses the second server-side', twice.ok, false);
+    check('...saying why', twice.message?.includes('one attempt only'), true);
+
+    await db.query(`delete from public.assignments where id = $1`, [futureId]);
+  }
+
+  // Enrolment, and the items themselves.
+  check('a student in another college cannot submit',
+    (await submitAs(ids.studB1, ids.asgOpen, TEXT)).ok, false);
+  check('an empty attempt is refused',
+    (await submitAs(ids.studA1, ids.asgOpen, [])).ok, false);
+  check('an unknown item kind is refused',
+    (await submitAs(ids.studA1, ids.asgOpen, [{ kind: 'sneaky', text_body: 'x' }])).ok, false);
+  check('an empty typed answer is refused',
+    (await submitAs(ids.studA1, ids.asgOpen, [{ kind: 'text', text_body: '' }])).ok, false);
+  {
+    await db.query(`update public.assignments set accept_link = false where id = $1`, [ids.asgOpen]);
+    const link = await submitAs(ids.studA1, ids.asgOpen, [{ kind: 'link', url: 'https://x.test' }]);
+    check('an item type the assignment refuses is rejected', link.ok, false);
+    await db.query(`update public.assignments set accept_link = true where id = $1`, [ids.asgOpen]);
+  }
+  check('an over-cap attempt is refused server-side',
+    (await submitAs(ids.studA1, ids.asgOpen,
+      [{ kind: 'file', storage_path: 'p', file_name: 'f', size_bytes: 200 * 1024 * 1024 }])).ok, false);
+
+  // The client cannot dictate the attempt number or the time — neither is read
+  // from the payload at all.
+  {
+    const forged = await submitAs(ids.studA1, ids.asgOpen,
+      [{ kind: 'text', text_body: 'x', attempt: 99, submitted_at: '2020-01-01' }]);
+    check('a client-supplied attempt number is ignored', forged.result?.attempt, 3);
+    check('...and a client-supplied timestamp is ignored',
+      String(forged.result?.submitted_at).startsWith('2020'), false);
+  }
+
+  // Late-ness is DERIVED. Moving the deadline changes it with no write at all.
+  {
+    const { rows: before } = await db.query(
+      `select sa.submitted_at > a.due_at as late
+         from public.submission_attempts sa
+         join public.submissions s on s.id = sa.submission_id
+         join public.assignments a on a.id = s.assignment_id
+        where s.assignment_id = $1 and s.student_id = $2 and sa.attempt = 1`,
+      [ids.asgOpen, ids.studA1]);
+    check('an attempt after the deadline reads as late', before[0]?.late, true);
+
+    await db.query(`update public.assignments set due_at = now() + interval '30 days' where id = $1`,
+      [ids.asgOpen]);
+    const { rows: after } = await db.query(
+      `select sa.submitted_at > a.due_at as late
+         from public.submission_attempts sa
+         join public.submissions s on s.id = sa.submission_id
+         join public.assignments a on a.id = s.assignment_id
+        where s.assignment_id = $1 and s.student_id = $2 and sa.attempt = 1`,
+      [ids.asgOpen, ids.studA1]);
+    check('...and extending the deadline makes it on time, with no write',
+      after[0]?.late, false);
+    await db.query(`update public.assignments set due_at = '2026-07-28 23:59+05:30' where id = $1`,
+      [ids.asgOpen]);
+  }
+
+  // is_late is gone, so nobody can read a stale flag and believe it.
+  check('submissions.is_late no longer exists',
+    await count(`select count(*)::int as n from pg_attribute a
+                   join pg_class c on c.oid = a.attrelid
+                   join pg_namespace n on n.oid = c.relnamespace
+                  where n.nspname='public' and c.relname='submissions' and a.attname='is_late'`), 0);
+
+  // Duplicate attempt numbers are unrepresentable — the constraint, not the
+  // ordering of statements, is what settles the two-tabs race.
+  await expectDenied('two rows cannot share an attempt number',
+    `insert into public.submission_attempts (institution_id, submission_id, attempt)
+       select institution_id, id, latest_attempt from public.submissions
+        where assignment_id = $1 and student_id = $2`,
+    [ids.asgOpen, ids.studA1]);
+
+  // A classmate still sees none of it.
+  await asUser(ids.studA2, async () => {
+    check('a classmate cannot read another student\'s attempts',
+      await count(`select count(*)::int as n from public.submission_attempts`), 0);
+  });
+  await asUser(ids.profA, async () => {
+    check('the professor who teaches it can read the attempts',
+      await count(`select count(*)::int as n from public.submission_attempts`) > 0, true);
+  });
+  await asUser(ids.profA2, async () => {
+    check('a professor who does not teach it cannot',
+      await count(`select count(*)::int as n from public.submission_attempts`), 0);
+  });
+}
+
+// ============================================================================
+// STORAGE (0010) — the path convention IS the access-control rule
+// ============================================================================
+console.log(`\n\x1b[1mSTORAGE — the path is the rule\x1b[0m`);
+{
+  // Asserted FIRST, because every path test below is meaningless if the
+  // indexing is wrong — and an off-by-one here fails silently.
+  const { rows: fn } = await db.query(
+    `select storage.foldername('inst/asg/owner/1/report.pdf') as f`);
+  check('foldername() excludes the filename', fn[0].f.length, 4);
+  check('...and is 1-INDEXED: [1] is the institution', fn[0].f[0], 'inst');
+  check('...[2] is the assignment', fn[0].f[1], 'asg');
+  check('...[3] is the owner — the segment the policy compares', fn[0].f[2], 'owner');
+  check('...[4] is the attempt', fn[0].f[3], '1');
+
+  const path = (inst, asg, owner, attempt = 1, file = 'report.pdf') =>
+    `${inst}/${asg}/${owner}/${attempt}/${file}`;
+  const upload = (who, name) =>
+    asUser(who, async () => {
+      try {
+        await db.query(
+          `insert into storage.objects (bucket_id, name) values ('submissions', $1)`, [name]);
+        return true;
+      } catch { return false; }
+    });
+  const canRead = (who, name) =>
+    asUser(who, () =>
+      count(`select count(*)::int as n from storage.objects where name = $1`, [name]));
+
+  const mine = path(ids.instA, ids.asgOpen, ids.studA1);
+  check('a student can upload into their own folder', await upload(ids.studA1, mine), true);
+
+  // ---- ACCEPTANCE CRITERION 1 --------------------------------------------
+  const theirs = path(ids.instA, ids.asgOpen, ids.studA2);
+  check('a student CANNOT write into another student\'s folder',
+    await upload(ids.studA1, theirs), false);
+
+  // ---- ACCEPTANCE CRITERION 2 --------------------------------------------
+  await db.query(`insert into storage.objects (bucket_id, name) values ('submissions', $1)`, [theirs]);
+  check('a student cannot READ another student\'s file', await canRead(ids.studA1, theirs), 0);
+  check('...but can read their own', await canRead(ids.studA1, mine), 1);
+
+  // ---- ACCEPTANCE CRITERION 3 --------------------------------------------
+  check('the professor who teaches it can read a submitted file',
+    await canRead(ids.profA, mine), 1);
+  check('a professor who does NOT teach it cannot', await canRead(ids.profA2, mine), 0);
+
+  // ---- tenancy ------------------------------------------------------------
+  check('a student cannot write into another institution\'s prefix',
+    await upload(ids.studA1, path(ids.instB, ids.asgOpen, ids.studA1)), false);
+  {
+    const foreign = path(ids.instB, ids.asgOpen, ids.studB1);
+    await db.query(`insert into storage.objects (bucket_id, name) values ('submissions', $1)`, [foreign]);
+    check('...and cannot read across one either', await canRead(ids.studA1, foreign), 0);
+  }
+
+  // ---- ACCEPTANCE CRITERION 4, at the storage layer ------------------------
+  //
+  // The deadline is enforced on UPLOAD, not only on recording. Without this a
+  // student could stage bytes after the deadline and only the recording call
+  // would refuse — leaving the file sitting there.
+  await db.query(`update public.assignments set status = 'closed' where id = $1`, [ids.asgOpen]);
+  check('a closed assignment refuses the UPLOAD, not just the recording',
+    await upload(ids.studA1, path(ids.instA, ids.asgOpen, ids.studA1, 2)), false);
+  await db.query(`update public.assignments set status = 'open' where id = $1`, [ids.asgOpen]);
+
+  check('a draft assignment refuses uploads too',
+    await upload(ids.studA1, path(ids.instA, ids.asgDraft, ids.studA1)), false);
+
+  // A malformed owner segment must be false, not an error — a cast failure
+  // inside a policy aborts the statement with something nobody can act on.
+  check('a malformed path is refused rather than crashing',
+    await upload(ids.studA1, `${ids.instA}/${ids.asgOpen}/not-a-uuid/1/x.pdf`), false);
+  check('a path with too few segments is refused',
+    await upload(ids.studA1, `${ids.instA}/x.pdf`), false);
+
+  // The bucket is the only thing that sees real bytes, so it is the only place
+  // a per-file byte cap can be enforced.
+  const { rows: bucket } = await db.query(
+    `select public, file_size_limit from storage.buckets where id = 'submissions'`);
+  check('the bucket is private', bucket[0].public, false);
+  check('...with a 50 MB per-file cap', Number(bucket[0].file_size_limit), 52428800);
+
+  // assignment_accepting() and submit_attempt() must agree, or the upload
+  // policy and the recording call disagree about whether a deadline has passed.
+  for (const [label, sql, expected] of [
+    ['an open assignment', `update public.assignments set status='open' where id=$1`, true],
+    ['a closed one', `update public.assignments set status='closed' where id=$1`, false],
+    ['a draft', `update public.assignments set status='draft' where id=$1`, false],
+  ]) {
+    await db.query(sql, [ids.asgOpen]);
+    const { rows } = await db.query(`select public.assignment_accepting($1) as v`, [ids.asgOpen]);
+    check(`assignment_accepting agrees for ${label}`, rows[0].v, expected);
+  }
+  await db.query(`update public.assignments set status='open' where id=$1`, [ids.asgOpen]);
+}
+
+// ============================================================================
 // CATALOGUE INVARIANTS — the rules that must stay true for tables not yet written
 //
 // Everything above tests behaviour that exists. This group tests the SHAPE of
@@ -1176,11 +1515,17 @@ console.log(`\n\x1b[1mCATALOGUE INVARIANTS — rules that outlive the tables the
     join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity
       and coalesce(obj_description(c.oid,'pg_class'),'') not like '%@append-only%'
+      -- ...or @function-written. Two different properties, and conflating them
+      -- would be wrong: @append-only forbids UPDATE to everyone including
+      -- service_role; @function-written forbids only CLIENT writes, because a
+      -- SECURITY DEFINER function does the writing. Both legitimately have a
+      -- SELECT policy and no write policy, which is what this check looks for.
+      and coalesce(obj_description(c.oid,'pg_class'),'') not like '%@function-written%'
       and exists (select 1 from pg_policy p where p.polrelid = c.oid and p.polcmd = 'r')
       and not exists (select 1 from pg_policy p where p.polrelid = c.oid and p.polcmd in ('w','d','a','*'))
   `);
   check(
-    `no table is append-only by accident — mark it or give it a write policy${
+    `no table is write-policy-less by accident — mark it or give it one${
       unmarked.length ? ` (unmarked: ${unmarked.map((r) => r.relname).join(', ')})` : ''
     }`,
     unmarked.length,
@@ -1292,6 +1637,58 @@ console.log(`\n\x1b[1mCATALOGUE INVARIANTS — rules that outlive the tables the
     ['course_offerings', 'courses', 'terms'].every((t) => def.includes(t)) &&
       (def.match(/deleted_at is null/g) ?? []).length === 3,
     true);
+}
+
+// Function-written tables (0009). The rule that stops a 0003 re-run handing
+// back the INSERT grant that hole (c) rode in on.
+{
+  const { rows } = await db.query(`
+    select c.relname, g.grantee, g.privilege_type
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    join information_schema.role_table_grants g
+      on g.table_name = c.relname and g.table_schema = 'public'
+    where n.nspname = 'public'
+      and coalesce(obj_description(c.oid,'pg_class'),'') like '%@function-written%'
+      and g.grantee in ('authenticated','anon')
+      and g.privilege_type in ('INSERT','UPDATE','DELETE')
+  `);
+  check(
+    `a @function-written table grants no client write${
+      rows.length ? ` (${rows.map((r) => `${r.relname}:${r.privilege_type}`).join(', ')})` : ''
+    }`,
+    rows.length,
+    0,
+  );
+  const { rows: marked } = await db.query(`
+    select count(*)::int as n from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname='public' and coalesce(obj_description(c.oid,'pg_class'),'') like '%@function-written%'
+  `);
+  check('submissions, submission_attempts and submission_files are all marked', marked[0].n, 3);
+}
+
+// The storage policy's shape. The off-by-one lives in a subscript, which no
+// behavioural test can point at directly — so the expression itself is asserted.
+{
+  const { rows } = await db.query(`
+    select p.polname, pg_get_expr(coalesce(p.polwithcheck, p.polqual), p.polrelid) as expr
+    from pg_policy p
+    join pg_class c on c.oid = p.polrelid
+    where c.relname = 'objects' and p.polname like 'submissions_%'
+  `);
+  const upload = rows.find((r) => r.polname === 'submissions_student_upload')?.expr ?? '';
+  check('the upload policy compares the OWNER at segment [3]',
+    upload.includes('foldername(name))[3]'), true);
+  check('...the INSTITUTION at segment [1]',
+    upload.includes('foldername(name))[1]'), true);
+  check('...and refuses an assignment that is not accepting work',
+    upload.includes('assignment_accepting'), true);
+  check('every submissions storage policy is scoped to its own bucket',
+    rows.length > 0 && rows.every((r) => r.expr.includes("'submissions'")), true);
+  check('...and no policy grants a client UPDATE or DELETE on stored objects',
+    (await count(`select count(*)::int as n from pg_policy p join pg_class c on c.oid = p.polrelid
+                   where c.relname='objects' and p.polcmd in ('w','d')`)), 0);
 }
 
 // The tables that must NEVER acquire deleted_at, named individually so that

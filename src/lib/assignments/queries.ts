@@ -43,6 +43,7 @@ export type FacultyAssignment = {
   acceptFile: boolean;
   acceptLink: boolean;
   acceptText: boolean;
+  allowMultipleAttempts: boolean;
   status: 'draft' | 'open' | 'closed';
   gradesReleased: boolean;
 };
@@ -63,7 +64,8 @@ const OFFERING_SELECT = `
 const ASSIGNMENT_COLUMNS = `
   id, title, instructions, marks, opens_at, due_at, allow_late, late_until,
   late_penalty_pct_per_day, hide_names_while_grading,
-  accept_file, accept_link, accept_text, status, grades_released
+  accept_file, accept_link, accept_text, allow_multiple_attempts,
+  status, grades_released
 ` as const;
 
 /** PostgREST returns an embedded to-one as an object or a single-element array
@@ -146,6 +148,7 @@ type AssignmentRow = {
   accept_file: boolean;
   accept_link: boolean;
   accept_text: boolean;
+  allow_multiple_attempts: boolean;
   status: 'draft' | 'open' | 'closed';
   grades_released: boolean;
 };
@@ -167,6 +170,7 @@ function toAssignment(row: AssignmentRow): FacultyAssignment {
     acceptFile: row.accept_file,
     acceptLink: row.accept_link,
     acceptText: row.accept_text,
+    allowMultipleAttempts: row.allow_multiple_attempts,
     status: row.status,
     gradesReleased: row.grades_released,
   };

@@ -4,6 +4,12 @@ This is the authoritative spec for the Campus app. Read it before building.
 Companion: `BUILD_RULES.md` (operating rules and stack). Where this
 spec and code disagree, this spec wins — update it if requirements change.
 
+**Revision 7 (submitting, `0009_submit_attempts.sql` + `0010_storage.sql`).** Three
+changes: `submissions.is_late` is **dropped** and late-ness derived per attempt; a new
+`submission_attempts` table makes an attempt an entity; and submitting moves out of RLS
+into `submit_attempt()`, a SECURITY DEFINER function that is now the only way in. Storage
+gets a private bucket and policies, both in a migration. Search "Revision 7".
+
 **Revision 6 (soft-delete cascade, `0008_soft_delete_cascade.sql`).** A soft-deleted term,
 course or offering now hides its content from non-staff at the RLS level. Previously it
 did not, because policies reaching a parent through a `SECURITY DEFINER` helper do not
@@ -481,8 +487,15 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
   row per student per assignment (or per team per assignment for team assignments).
   Resubmissions add a new attempt to `submission_files` and bump the submission's
   `latest_attempt`.
-  (id, assignment_id, student_id?, team_id?, submitted_at, is_late boolean default false,
-   latest_attempt int default 1)
+  (id, assignment_id, student_id?, team_id?, submitted_at, latest_attempt int default 1)
+  — **`is_late` was DROPPED (Revision 7).** It was stored at submit time, which
+    contradicts the product: the announcement copy promises that extending a deadline
+    makes work show *as on time*, and a frozen boolean cannot do that. Late-ness is now
+    DERIVED per attempt — `attempt.submitted_at > assignment.due_at` — so it self-corrects
+    with no write. A stored column nothing reads is a trap for whoever reads it next.
+  — Attempt 1 on time and attempt 2 late are both true and both shown. **The app does not
+    decide which one counts**; it flags each honestly and shows the professor all of them,
+    the same philosophy §3.6 applies to locking team sets.
   — individual: unique(assignment_id, student_id); team: unique(assignment_id, team_id).
     Exactly one of student_id / team_id is set (team_id iff the assignment is_team).
   — **The grade does NOT live on this row** (Revision 2 — it used to). See
@@ -549,6 +562,16 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
     in the same millisecond tie and would otherwise render in a different order on
     consecutive loads.
 
+- **submission_attempts**(id, institution_id, submission_id → submissions, attempt int,
+  submitted_at timestamptz not null default now()) — **unique(submission_id, attempt)**
+  — **An attempt is an entity (Revision 7).** Deriving its time from `min(uploaded_at)`
+    over its items gives three candidate answers when an attempt holds a file, a link and
+    a typed answer, and moves if an item is ever replaced.
+  — The unique constraint is what makes the two-tabs race **unrepresentable** rather than
+    merely unlikely: two browser tabs both reading `latest_attempt = 1` cannot both write
+    attempt 2.
+  — index(submission_id, attempt desc), index(institution_id)
+
 - **submission_files**(id, submission_id, attempt int default 1, kind check in
   ('file','link','text'), storage_path?, url?, text_body?, file_name?, uploaded_at)
   — one submission can have several items in one attempt (a file + a link + text), and
@@ -593,6 +616,63 @@ RLS enabled with policies keyed off the requesting user's profile. Timestamps
 ### Notifications
 - **notifications**(id, user_id, type text, payload jsonb default '{}', read_at?,
   created_at) — index(user_id, read_at). v1 type = 'announcement'; extensible later.
+
+### Submitting — a FUNCTION, not a policy (Revision 7)
+
+`submit_attempt(p_assignment_id uuid, p_items jsonb)` is the **only** way to create or
+extend a submission. Clients hold no INSERT or UPDATE on `submissions`,
+`submission_attempts` or `submission_files`; all three carry the `@function-written`
+marker that `0003_grants.sql` reads to keep it that way across re-runs.
+
+It exists because three things RLS cannot do had to happen at once:
+
+1. **A student could not resubmit at all.** Bumping `latest_attempt` is an UPDATE, and
+   the only UPDATE policy on `submissions` is the professor's. It failed silently, at 0
+   rows affected.
+2. **The obvious fix was worse.** Granting students UPDATE also grants `submitted_at` —
+   and RLS cannot compare OLD to NEW, so nothing would stop a student backdating their own
+   work. The same trap already documented for `profiles.role`.
+3. **The resubmission path skipped the deadline entirely.** The old
+   `submission_files_student_insert` checked ownership and never looked at the assignment;
+   a student could append work to an assignment that closed weeks earlier, labelled any
+   attempt number they chose. Verified against a running database before it was closed.
+
+The function verifies enrolment, that the assignment is open / past `opens_at` / within
+`due_at` or the late window, and the multiple-attempts policy; computes the attempt number
+from the database inside one statement; and sets `submitted_at` from the server clock. A
+client-supplied attempt number or timestamp is not read at all.
+
+### Storage — the path convention IS the access-control rule (Revision 7)
+
+Private bucket `submissions`, created and governed in `0010_storage.sql` rather than
+through the dashboard, because configuration that exists only in a web UI cannot be
+reviewed, diffed or restored.
+
+```
+{institution_id}/{assignment_id}/{owner_id}/{attempt}/{filename}
+```
+
+Institution FIRST, deliberately: tenant isolation is visible in the path itself, which is
+what makes a later move to per-tenant buckets or institution-provided storage a migration
+rather than a rewrite (FUTUREPROOFING item 5). `storage.foldername()` is 1-indexed, so the
+owner is segment **[3]** — asserted in the test suite, because an off-by-one there fails
+silently.
+
+Policies: a student writes and reads only where the owner segment is their own id (or a
+team they belong to) **and** the assignment is currently accepting work — so a missed
+deadline stops the bytes, not merely the row. Faculty who teach the offering read all of
+it. Nothing crosses an institution. No client holds UPDATE or DELETE: nothing is removed
+on resubmit.
+
+Caps are enforced in three places because each catches what the others cannot: the browser
+(fast feedback, bypassable), the bucket's `file_size_limit` (the only thing that sees
+actual bytes — 50 MB per file), and `submit_attempt()` (item count and claimed total —
+150 MB, 20 items). A 50 MB cap with unlimited files is not a cap.
+
+Uploads go **client-direct** with the student's session so RLS applies and no file passes
+through the Next.js server; the server then re-validates that the recorded path matches
+the caller and the assignment before writing the row. Both, because the client chooses the
+path.
 
 ### RLS policy shape (write one set per table)
 - Enable RLS on every table.
