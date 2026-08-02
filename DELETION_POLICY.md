@@ -185,6 +185,75 @@ before it is designed.
 
 ---
 
+## 5b. What happens to the CHILDREN. DECIDED, 2 August 2026.
+
+The gap that let a real bug through: this document said which tables get `deleted_at` and
+said nothing about what a hidden parent does to its content. Two things were true and
+neither was intended.
+
+**The bug.** `FORCE ROW LEVEL SECURITY` is set nowhere, so the table owner bypasses RLS —
+and every `SECURITY DEFINER` helper runs as that owner. A policy reaching another table by
+**direct subquery** inherits its RLS; one reaching it through a **helper function** does
+not. Cascade behaviour was being decided by that accident. Measured, not inferred: with an
+offering soft-deleted, an enrolled student could still read its assignments,
+announcements, team sets, attendance sessions, timetable slots, course info and mark
+split. With the *course* deleted, the offering itself stayed visible too.
+
+**DECIDED: a hidden parent hides its children, enforced in RLS.**
+
+- One function, `offering_chain_live(offering_id)`, states the whole chain once: the
+  offering, its course and its term must all be live. A policy cannot implement half of it.
+- A RESTRICTIVE policy on every offering-scoped table, generated from the catalogue by
+  "does this table have an `offering_id`". Restrictive means it is ANDed with the existing
+  permissive policies, so it can only narrow access and nothing existing had to be edited.
+- Staff keep visibility via `is_staff()`, because otherwise undelete is impossible.
+- Implemented in `0008_soft_delete_cascade.sql`; asserted, and mutation-tested, in
+  `supabase/tests/rls.test.mjs`.
+
+**Two tables deliberately do NOT cascade: `submissions` and `attendance_records`.**
+
+Both policies open with `student_id = auth.uid()`, a branch with no subquery, so a student
+keeps sight of their own submission and their own attendance marks even when the offering
+is hidden. That is left as it is, on purpose:
+
+- §2 excludes these tables from `deleted_at` because they are **academic record** — "a
+  student's submitted work is the thing a dispute is about". Cascading the visibility away
+  would achieve indirectly what that decision forbids directly.
+- It is not a confidentiality leak. A student sees only their own rows; a classmate still
+  sees nothing.
+- If an admin hides a course by mistake, a student losing sight of their own work is the
+  worse of the two failures. That evidence is what they need most when something is wrong.
+
+## 5c. Should a parent with live children be deletable at all? DECIDED, 2 August 2026.
+
+**No — and the answer belongs in the server action, not the database.**
+
+`DELETION_POLICY.md` frames soft-delete as a fix for **mistakes**, and a mistake has no
+content yet. An offering with twelve assignments and a term of attendance is not a
+mistake; it is a course someone wants rid of, which is a different request with a
+different answer (archive the term, or end the enrolments).
+
+The orphan case above is the evidence. Cascade cannot cleanly cover `submissions` and
+`attendance_records` without contradicting §2 — so hiding a parent that has them leaves a
+student holding work that belongs to a course they can no longer see. The way to make
+that state unreachable is not a cleverer cascade; it is to refuse to create it.
+
+**The split, and why it is a split:**
+
+- **RLS is the safety net.** It cascades unconditionally, so if a delete does happen —
+  through a script, a repair, an admin using the API directly — nothing leaks. A safety
+  net that can be talked out of catching you is not one.
+- **The server action is the behaviour.** It counts live children and refuses with the
+  number: *"This offering has 12 assignments and 340 attendance records. Delete those
+  first, or archive the term instead."* A count is a better refusal than a warning,
+  because it tells the person what they are actually about to do.
+
+A database trigger was considered and rejected: it would also block legitimate end-of-life
+tidying, and it would make undelete-then-redelete fail in ways nobody could read.
+
+**Not built this session** — nothing deletes anything yet, so there is no action to put it
+in. Recorded here so the delete button ships with it rather than after it.
+
 ## 6. Enforcement — the part that decides whether this holds
 
 A `deleted_at` that queries forget to filter is worse than no `deleted_at`, because it
@@ -204,6 +273,10 @@ complains until a deleted student appears in someone's roster.
 
 ## Decisions taken — 31 July 2026
 
+0. **A hidden parent hides its children** (§5b), enforced in RLS via
+   `offering_chain_live()`. `submissions` and `attendance_records` deliberately excepted.
+   **A parent with live children should not be deletable at all** (§5c) — refused in the
+   server action, with RLS as the safety net beneath it.
 1. **Alumni keep read-only access.** Three-value `status`; the surface itself is deferred.
 2. **Erasure anonymises, never deletes.** Academic record survives; resume is destroyed.
 3. **Profiles carry `status`, never `deleted_at`.** People are deactivated, not hidden.

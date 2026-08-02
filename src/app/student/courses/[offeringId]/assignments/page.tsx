@@ -100,7 +100,7 @@ export default async function StudentAssignmentsPage({
                           ✓
                         </span>
                       ) : a.derived.state === 'upcoming' ? (
-                        <span className="eyebrow text-faint shrink-0">
+                        <span className="eyebrow text-ink-faint shrink-0">
                           Upcoming
                         </span>
                       ) : null}

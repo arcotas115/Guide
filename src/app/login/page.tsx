@@ -28,7 +28,7 @@ export default async function LoginPage({
           <h1 className="text-ink text-2xl font-semibold tracking-tight">
             Campus
           </h1>
-          <p className="text-subtle mt-1 text-sm">
+          <p className="text-ink-soft mt-1 text-sm">
             Sign in with the account your college gave you.
           </p>
         </div>
@@ -44,7 +44,7 @@ export default async function LoginPage({
 
         <LoginForm next={nextPath} />
 
-        <p className="text-faint mt-8 text-xs leading-relaxed">
+        <p className="text-ink-faint mt-8 text-xs leading-relaxed">
           Accounts are created by your institution. If you cannot sign in, ask
           your department office or campus admin.
         </p>

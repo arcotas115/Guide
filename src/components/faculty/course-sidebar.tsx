@@ -43,9 +43,9 @@ export function CourseSidebar({ offering }: { offering: OfferingSummary }) {
               — DESIGN.md §3. */}
           <p className="course-code mt-4">{offering.courseCode}</p>
           <p className="row-title text-ink mt-1">{offering.courseTitle}</p>
-          <p className="text-subtle mt-1.5 text-[13px]">
+          <p className="text-ink-soft mt-1.5 text-[13px]">
             Section {offering.section}
-            <span className="text-faint px-1.5">·</span>
+            <span className="text-ink-faint px-1.5">·</span>
             {offering.credits} credits
           </p>
         </>

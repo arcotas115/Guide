@@ -77,7 +77,7 @@ export default async function StudentAssignmentPage({
           {derived.state !== 'graded' ? (
             <p
               className={`mt-1.5 text-[13.5px] leading-relaxed ${
-                derived.isUrgent ? 'text-rust-deep/85' : 'text-subtle'
+                derived.isUrgent ? 'text-rust-deep/85' : 'text-ink-soft'
               }`}
             >
               Due {formatDateTime(assignment.dueAt, tz)}
@@ -92,7 +92,7 @@ export default async function StudentAssignmentPage({
           {derived.acceptingUntil ? (
             <p
               className={`mt-1 text-[13px] ${
-                derived.isUrgent ? 'text-rust-deep/70' : 'text-subtle'
+                derived.isUrgent ? 'text-rust-deep/70' : 'text-ink-soft'
               }`}
             >
               {assignment.latePenaltyPctPerDay > 0
@@ -105,7 +105,7 @@ export default async function StudentAssignmentPage({
         {assignment.feedback ? (
           <section className="bg-moss-bg mt-4 rounded-xl px-4 py-4">
             <Eyebrow className="text-moss-deep/70">Feedback</Eyebrow>
-            <p className="text-ink-soft mt-2 text-[14.5px] leading-relaxed">
+            <p className="text-ink-strong mt-2 text-[14.5px] leading-relaxed">
               {assignment.feedback}
             </p>
           </section>
@@ -114,11 +114,11 @@ export default async function StudentAssignmentPage({
         <section className="mt-7">
           <Eyebrow>What to do</Eyebrow>
           {assignment.instructions ? (
-            <p className="text-ink-soft body-text mt-2.5 whitespace-pre-wrap">
+            <p className="text-ink-strong body-text mt-2.5 whitespace-pre-wrap">
               {assignment.instructions}
             </p>
           ) : (
-            <p className="text-subtle body-text mt-2.5">
+            <p className="text-ink-soft body-text mt-2.5">
               Your professor has not added instructions for this one.
             </p>
           )}
@@ -143,7 +143,7 @@ export default async function StudentAssignmentPage({
 
         {/* No submission UI this session — that is the next step. Saying so
             beats a disabled button with no explanation. */}
-        <p className="text-faint mt-5 px-1 text-[12.5px] leading-relaxed">
+        <p className="text-ink-faint mt-5 px-1 text-[12.5px] leading-relaxed">
           Handing work in from your phone arrives in the next update.
         </p>
       </div>
@@ -182,7 +182,7 @@ function Row({
 }) {
   return (
     <div className="flex items-baseline justify-between gap-4 px-4 py-3">
-      <dt className="text-subtle shrink-0">{label}</dt>
+      <dt className="text-ink-soft shrink-0">{label}</dt>
       <dd
         className={`text-ink text-right ${mono ? 'font-mono text-[13px]' : ''}`}
       >

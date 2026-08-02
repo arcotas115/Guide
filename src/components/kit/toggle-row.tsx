@@ -47,7 +47,7 @@ export function ToggleRow({
           {label}
         </label>
         {hint ? (
-          <p className="text-subtle mt-1 text-[12.5px] leading-relaxed">
+          <p className="text-ink-soft mt-1 text-[12.5px] leading-relaxed">
             {hint}
           </p>
         ) : null}
@@ -67,7 +67,7 @@ export function ToggleRow({
           disabled ? 'cursor-not-allowed' : 'cursor-pointer',
           checked
             ? 'border-transparent'
-            : 'border-card-border bg-canvas hover:border-subtle',
+            : 'border-card-border bg-canvas hover:border-ink-soft',
         )}
         style={
           // ON uses the course colour where there is one, so the control reads
@@ -121,7 +121,7 @@ export function PillToggle({
         'focus-visible:ring-ring/50 outline-none focus-visible:ring-2',
         pressed
           ? 'bg-ink text-canvas'
-          : 'text-ink-muted border-card-border bg-card hover:border-subtle border',
+          : 'text-ink-muted border-card-border bg-card hover:border-ink-soft border',
         disabled && 'cursor-not-allowed opacity-45',
       )}
     >

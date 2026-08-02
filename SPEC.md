@@ -4,6 +4,12 @@ This is the authoritative spec for the Campus app. Read it before building.
 Companion: `BUILD_RULES.md` (operating rules and stack). Where this
 spec and code disagree, this spec wins — update it if requirements change.
 
+**Revision 6 (soft-delete cascade, `0008_soft_delete_cascade.sql`).** A soft-deleted term,
+course or offering now hides its content from non-staff at the RLS level. Previously it
+did not, because policies reaching a parent through a `SECURITY DEFINER` helper do not
+inherit its RLS while ones using a direct subquery do — so cascade behaviour was decided
+by that accident. Search "Revision 6".
+
 **Revision 5 (soft delete, `0007_soft_delete.sql`).** Implements `DELETION_POLICY.md`.
 `profiles.status` (active / alumni / inactive) replaces any notion of deleting a person;
 `deleted_at` lands on the twelve tables a human *creates* and on none of the ones that
@@ -311,6 +317,14 @@ later thinking it was an oversight:**
 | `enrolments`, `teaching_assignments`, `team_members` | Join rows. `team_members` already hard-deletes on "leave team", which is correct. |
 | `notifications`, `announcement_reads` | Ephemeral. Hard delete is fine. |
 
+- **A hidden parent hides its children (Revision 6).** `offering_chain_live(offering_id)`
+  states the chain once — the offering, its course and its term must all be live — and a
+  RESTRICTIVE policy on every offering-scoped table enforces it. Generated from the
+  catalogue by "has an `offering_id` column", so a table added later is covered
+  automatically. `teams`/`team_members` reach an offering through `team_set_id` and carry
+  their own named policies. **`submissions` and `attendance_records` deliberately do NOT
+  cascade** — they are academic record, and a student keeps sight of their own work and
+  attendance even when the offering is hidden (DELETION_POLICY.md §5b).
 - **Hiding is enforced in RLS, not in queries.** Each soft-deletable table carries a
   RESTRICTIVE policy `deleted_at is null or is_staff()`, which is ANDed with its existing
   permissive policies. So a forgotten `where` clause cannot leak a hidden row to a

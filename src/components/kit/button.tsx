@@ -18,8 +18,8 @@ const base =
   'disabled:cursor-not-allowed disabled:opacity-45';
 
 const variants = {
-  primary: 'bg-ink text-canvas hover:bg-ink-soft',
-  secondary: 'bg-card text-ink border border-card-border hover:border-subtle',
+  primary: 'bg-ink text-canvas hover:bg-ink-strong',
+  secondary: 'bg-card text-ink border border-card-border hover:border-ink-soft',
   ghost: 'text-ink-muted hover:text-ink hover:bg-canvas',
 } as const;
 
@@ -68,7 +68,7 @@ export function Button({
         {children}
       </button>
       {disabledReason ? (
-        <span className="text-subtle mt-1.5 block text-[12.5px] leading-relaxed">
+        <span className="text-ink-soft mt-1.5 block text-[12.5px] leading-relaxed">
           {disabledReason}
         </span>
       ) : null}

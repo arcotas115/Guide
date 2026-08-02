@@ -233,7 +233,7 @@ export function facultyGroupFor(
 /** Tailwind classes per state. Kept beside the derivation so a new state cannot
  *  be added without someone deciding how it looks. */
 export const STATE_STYLES: Record<AssignmentState, string> = {
-  upcoming: 'text-subtle',
+  upcoming: 'text-ink-soft',
   open: 'text-ink-muted',
   submitted: 'text-moss-deep',
   graded: 'text-moss-deep',

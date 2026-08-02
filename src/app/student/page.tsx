@@ -31,11 +31,11 @@ export default async function StudentHome() {
           <h1 className="screen-title text-ink">Hello, {firstName}</h1>
           {/* Explicit separator element between the institution and the roll
               number — never two spans butted together. */}
-          <p className="text-subtle mt-2 text-[14px]">
+          <p className="text-ink-soft mt-2 text-[14px]">
             {profile.institutionName}
             {profile.rollNumber ? (
               <>
-                <span className="text-faint px-1.5">·</span>
+                <span className="text-ink-faint px-1.5">·</span>
                 <span className="font-mono text-[12.5px]">
                   {profile.rollNumber}
                 </span>
@@ -46,7 +46,7 @@ export default async function StudentHome() {
         <SignOutButton />
       </header>
 
-      <h2 className="eyebrow text-faint mt-9">Your courses</h2>
+      <h2 className="eyebrow text-ink-faint mt-9">Your courses</h2>
 
       {offerings.length === 0 ? (
         <div className="mt-3">

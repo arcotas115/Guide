@@ -120,7 +120,7 @@ export default async function StudentCoursePage({
           </ul>
         </Card>
 
-        <p className="text-faint mt-4 px-1 text-[12.5px] leading-relaxed">
+        <p className="text-ink-faint mt-4 px-1 text-[12.5px] leading-relaxed">
           The dimmed sections are on the way. Assignments is live now.
         </p>
       </div>

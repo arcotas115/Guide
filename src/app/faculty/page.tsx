@@ -37,7 +37,7 @@ export default async function FacultyHome() {
     >
       <div className="mx-auto w-full max-w-3xl">
         <h1 className="screen-title text-ink">Good to see you, {firstName}.</h1>
-        <p className="text-subtle mt-2 text-[14.5px]">
+        <p className="text-ink-soft mt-2 text-[14.5px]">
           {profile.institutionName}
         </p>
 

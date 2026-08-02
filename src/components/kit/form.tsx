@@ -35,7 +35,7 @@ export function Field({
       {error ? (
         <p className="text-rust mt-1.5 text-[12.5px] leading-relaxed">{error}</p>
       ) : hint ? (
-        <p className="text-subtle mt-1.5 text-[12.5px] leading-relaxed">
+        <p className="text-ink-soft mt-1.5 text-[12.5px] leading-relaxed">
           {hint}
         </p>
       ) : null}
@@ -77,8 +77,8 @@ export function FormPanel({
  */
 export const inputClass =
   'w-full rounded-lg border border-card-border bg-canvas px-3 text-[14.5px] text-ink ' +
-  'placeholder:text-faint outline-none transition-colors ' +
-  'focus-visible:border-subtle focus-visible:ring-2 focus-visible:ring-ring/30 ' +
+  'placeholder:text-ink-faint outline-none transition-colors ' +
+  'focus-visible:border-ink-soft focus-visible:ring-2 focus-visible:ring-ring/30 ' +
   'disabled:cursor-not-allowed disabled:opacity-45';
 
 export function TextInput({

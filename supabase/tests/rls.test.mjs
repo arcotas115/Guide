@@ -46,6 +46,7 @@ await db.exec(migration('0004_assignment_fields_and_grade_split.sql'));
 await db.exec(migration('0005_foundations.sql'));
 await db.exec(migration('0006_tenant_integrity.sql'));
 await db.exec(migration('0007_soft_delete.sql'));
+await db.exec(migration('0008_soft_delete_cascade.sql'));
 // 0004 and 0005 create tables, so 0003's ON ALL TABLES snapshot is stale —
 // exactly the re-run those migrations' headers tell you to do. Running it LAST,
 // after every table exists and is commented, proves two things at once: that the
@@ -781,6 +782,135 @@ console.log(`\n\x1b[1mSOFT DELETE — hidden means hidden, and reversible\x1b[0m
   await db.query(`delete from public.assignments where id = $1`, [asgId]);
 }
 
+console.log(`\n\x1b[1mSOFT DELETE CASCADE — a hidden parent hides its children\x1b[0m`);
+{
+  // Everything below hangs off offerA, which studA1 is enrolled in and profA
+  // teaches. Deleting a parent must take the lot out of the student's view
+  // without a single query needing to know about it.
+  const tsId = crypto.randomUUID();
+  const slotId = crypto.randomUUID();
+  const sessId = crypto.randomUUID();
+  const annId = crypto.randomUUID();
+  await db.query(
+    `insert into public.team_sets (id, institution_id, offering_id, name, min_size, max_size)
+       values ($1,$2,$3,'Cascade probe',2,4)`, [tsId, ids.instA, ids.offerA]);
+  await db.query(
+    `insert into public.timetable_slots (id, institution_id, offering_id, day_of_week, starts_at, ends_at)
+       values ($1,$2,$3,1,'09:00','10:00')`, [slotId, ids.instA, ids.offerA]);
+  await db.query(
+    `insert into public.attendance_sessions (id, institution_id, offering_id, held_on, taken_by, code_seed)
+       values ($1,$2,$3,'2026-08-14',$4,'seed')`, [sessId, ids.instA, ids.offerA, ids.profA]);
+  await db.query(
+    `insert into public.announcements (id, institution_id, offering_id, author_id, title, body)
+       values ($1,$2,$3,$4,'Notice','Body')`, [annId, ids.instA, ids.offerA, ids.profA]);
+
+  const CHILDREN = ['assignments', 'announcements', 'team_sets',
+                    'attendance_sessions', 'timetable_slots'];
+  const visible = async (who) => {
+    const out = [];
+    for (const t of CHILDREN) {
+      const n = await asUser(who, () =>
+        count(`select count(*)::int as n from public.${t} where offering_id = $1`, [ids.offerA]));
+      if (n > 0) out.push(t);
+    }
+    return out;
+  };
+
+  check('baseline: the student sees all five kinds of course content',
+    (await visible(ids.studA1)).length, 5);
+
+  // --- level 1: the offering itself ---------------------------------------
+  await db.query(`update public.course_offerings set deleted_at = now() where id = $1`, [ids.offerA]);
+  {
+    const leaked = await visible(ids.studA1);
+    check(`a soft-deleted offering hides ALL its content from an enrolled student${
+      leaked.length ? ` (leaked: ${leaked.join(', ')})` : ''}`, leaked.length, 0);
+    check('...and the offering row itself',
+      await asUser(ids.studA1, () =>
+        count(`select count(*)::int as n from public.course_offerings where id = $1`, [ids.offerA])), 0);
+    check('...while the professor still sees all of it, so undelete is possible',
+      (await visible(ids.profA)).length, 5);
+    check('...and so does an admin',
+      (await visible(ids.adminA)).length, 5);
+  }
+  await db.query(`update public.course_offerings set deleted_at = null where id = $1`, [ids.offerA]);
+  check('undeleting the offering brings the content back',
+    (await visible(ids.studA1)).length, 5);
+
+  // --- level 2: the course above it ---------------------------------------
+  await db.query(`update public.courses set deleted_at = now() where id = $1`, [ids.courseA]);
+  {
+    const leaked = await visible(ids.studA1);
+    check(`a soft-deleted COURSE hides its offering's content too${
+      leaked.length ? ` (leaked: ${leaked.join(', ')})` : ''}`, leaked.length, 0);
+    check('...and the offering, which was the second leak',
+      await asUser(ids.studA1, () =>
+        count(`select count(*)::int as n from public.course_offerings where id = $1`, [ids.offerA])), 0);
+  }
+  await db.query(`update public.courses set deleted_at = null where id = $1`, [ids.courseA]);
+
+  // --- level 2: the term ---------------------------------------------------
+  await db.query(`update public.terms set deleted_at = now() where id = $1`, [ids.termA]);
+  check('a soft-deleted TERM hides everything under it as well',
+    (await visible(ids.studA1)).length, 0);
+  await db.query(`update public.terms set deleted_at = null where id = $1`, [ids.termA]);
+  check('...and restoring the term restores the lot',
+    (await visible(ids.studA1)).length, 5);
+
+  // --- inherited for free, via direct subquery -----------------------------
+  {
+    const afId = crypto.randomUUID();
+    await db.query(
+      `insert into public.assignment_files (id, institution_id, assignment_id, storage_path, file_name)
+         values ($1,$2,$3,'p/x.pdf','x.pdf')`, [afId, ids.instA, ids.asgOpen]);
+    await db.query(`update public.course_offerings set deleted_at = now() where id = $1`, [ids.offerA]);
+    check('assignment_files cascades without a policy of its own (direct subquery)',
+      await asUser(ids.studA1, () =>
+        count(`select count(*)::int as n from public.assignment_files where id = $1`, [afId])), 0);
+    await db.query(`update public.course_offerings set deleted_at = null where id = $1`, [ids.offerA]);
+    await db.query(`delete from public.assignment_files where id = $1`, [afId]);
+  }
+
+  // --- DELIBERATELY NOT cascaded ------------------------------------------
+  //
+  // Both policies open with `student_id = auth.uid()`, a branch with no
+  // subquery, so there is nothing for RLS to be inherited through. Left that
+  // way on purpose: these are the student's own academic record, and
+  // DELETION_POLICY.md §2 keeps them out of soft-delete precisely because a
+  // dispute is about the work. A student losing sight of their own submission
+  // because an admin hid a course is the worse of the two failures. It is not
+  // a confidentiality leak — they see only their own rows.
+  {
+    const subId = crypto.randomUUID();
+    await db.query(
+      `insert into public.submissions (id, institution_id, assignment_id, student_id)
+         values ($1,$2,$3,$4)`, [subId, ids.instA, ids.asgOpen, ids.studA2]);
+    await db.query(
+      `insert into public.attendance_records (institution_id, session_id, student_id, status, marked_via)
+         values ($1,$2,$3,'present','code')`, [ids.instA, sessId, ids.studA2]);
+    await db.query(`update public.course_offerings set deleted_at = now() where id = $1`, [ids.offerA]);
+
+    check('a student KEEPS their own submission when the offering is hidden',
+      await asUser(ids.studA2, () =>
+        count(`select count(*)::int as n from public.submissions where id = $1`, [subId])), 1);
+    check('...and their own attendance marks',
+      await asUser(ids.studA2, () =>
+        count(`select count(*)::int as n from public.attendance_records where session_id = $1`, [sessId])), 1);
+    check('...but a classmate still cannot see either',
+      await asUser(ids.studA1, () =>
+        count(`select count(*)::int as n from public.submissions where id = $1`, [subId])), 0);
+
+    await db.query(`update public.course_offerings set deleted_at = null where id = $1`, [ids.offerA]);
+    await db.query(`delete from public.attendance_records where session_id = $1`, [sessId]);
+    await db.query(`delete from public.submissions where id = $1`, [subId]);
+  }
+
+  await db.query(`delete from public.announcements where id = $1`, [annId]);
+  await db.query(`delete from public.attendance_sessions where id = $1`, [sessId]);
+  await db.query(`delete from public.timetable_slots where id = $1`, [slotId]);
+  await db.query(`delete from public.team_sets where id = $1`, [tsId]);
+}
+
 console.log(`\n\x1b[1mPARTIAL UNIQUES — reuse a code, never a roll number\x1b[0m`);
 {
   const c1 = crypto.randomUUID(), c2 = crypto.randomUUID();
@@ -1072,12 +1202,18 @@ console.log(`\n\x1b[1mCATALOGUE INVARIANTS — rules that outlive the tables the
     join pg_attribute a on a.attrelid = c.oid and a.attname = 'deleted_at' and a.attnum > 0
     where n.nspname = 'public' and c.relkind = 'r'
   `);
+  // Matched by POLICY NAME, not by whether the expression mentions deleted_at.
+  // The text match was too crude: 0008's cascade policies reference a PARENT's
+  // deleted_at from tables that have no such column of their own (team_members
+  // reaches team_sets), and those were being reported as orphans. The naming
+  // convention the migrations already follow — <table>_hide_deleted — says
+  // precisely what this check means.
   const { rows: pols } = await db.query(`
     select c.relname from pg_policy p
     join pg_class c on c.oid = p.polrelid
     join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and p.polpermissive = false
-      and pg_get_expr(p.polqual, p.polrelid) like '%deleted_at%'
+      and p.polname = c.relname || '_hide_deleted'
   `);
   const withCol = new Set(cols.map((r) => r.relname));
   const withPol = new Set(pols.map((r) => r.relname));
@@ -1097,6 +1233,65 @@ console.log(`\n\x1b[1mCATALOGUE INVARIANTS — rules that outlive the tables the
     orphaned.length,
     0,
   );
+}
+
+// Cascade (0008). Same two-directional shape: every table that hangs off an
+// offering must carry the cascade policy, and no cascade policy may outlive the
+// column it reads. Without this, a table added in 1B with an offering_id gets
+// no cascade and nothing complains — which is exactly how the original gap
+// arrived, since the nine leaking policies all looked correct in isolation.
+{
+  const { rows: cols } = await db.query(`
+    select c.relname from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_attribute a on a.attrelid = c.oid and a.attname = 'offering_id' and a.attnum > 0
+    where n.nspname = 'public' and c.relkind = 'r'
+  `);
+  const { rows: pols } = await db.query(`
+    select c.relname from pg_policy p
+    join pg_class c on c.oid = p.polrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and p.polpermissive = false
+      and p.polname = c.relname || '_offering_live'
+  `);
+  const withCol = new Set(cols.map((r) => r.relname));
+  const withPol = new Set(pols.map((r) => r.relname));
+  const uncovered = [...withCol].filter((t) => !withPol.has(t));
+  const orphaned = [...withPol].filter(
+    // teams and team_members reach an offering through team_set_id rather than
+    // an offering_id column, so they are covered by name-matched policies
+    // written out in 0008 §4 rather than by the generated loop.
+    (t) => !withCol.has(t) && !['teams', 'team_members'].includes(t),
+  );
+
+  check(
+    `every offering-scoped table cascades a hidden parent${
+      uncovered.length ? ` (uncovered: ${uncovered.join(', ')})` : ''
+    }`,
+    uncovered.length,
+    0,
+  );
+  check(
+    `...and no cascade policy outlives its offering_id${orphaned.length ? ` (${orphaned.join(', ')})` : ''}`,
+    orphaned.length,
+    0,
+  );
+  check('teams and team_members cascade via team_set_id',
+    ['teams', 'team_members'].every((t) => withPol.has(t)), true);
+
+  // The chain is stated once. A policy that re-implemented half of it — say,
+  // checking the offering but not its course — would pass the checks above
+  // while leaking level 2, which is the bug this session started with.
+  const { rows: fn } = await db.query(`
+    select pg_get_functiondef(p.oid) as def
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'offering_chain_live'
+  `);
+  const def = fn[0]?.def ?? '';
+  check('offering_chain_live checks the offering, its course AND its term',
+    ['course_offerings', 'courses', 'terms'].every((t) => def.includes(t)) &&
+      (def.match(/deleted_at is null/g) ?? []).length === 3,
+    true);
 }
 
 // The tables that must NEVER acquire deleted_at, named individually so that

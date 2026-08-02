@@ -141,7 +141,7 @@ export default async function FacultyAssignmentsPage({
       <div className="flex flex-wrap items-start justify-between gap-6">
         <div>
           <h1 className="screen-title text-ink">Assignments</h1>
-          <p className="text-subtle mt-2 text-[14px]">
+          <p className="text-ink-soft mt-2 text-[14px]">
             {all.length === 0
               ? 'Nothing set yet.'
               : `${all.length} in this course`}
@@ -185,7 +185,7 @@ export default async function FacultyAssignmentsPage({
                 active={f.key === filter}
               />
             ))}
-            <span className="text-faint ml-auto text-[12.5px]">
+            <span className="text-ink-faint ml-auto text-[12.5px]">
               {all.length} total
               <span className="px-1.5">·</span>
               showing {visible.length}
@@ -225,7 +225,7 @@ export default async function FacultyAssignmentsPage({
                             </Link>
                             {/* Separate line, explicit separators — never
                                 `Page replacement15 marks`. */}
-                            <p className="text-subtle mt-1 text-[12.5px]">
+                            <p className="text-ink-soft mt-1 text-[12.5px]">
                               {subtitle(a, now, tz)}
                             </p>
                             {/*
@@ -261,10 +261,10 @@ export default async function FacultyAssignmentsPage({
                           <TableCell>
                             {notOpenYet ? (
                               <>
-                                <p className="text-faint font-mono text-[13px]">
+                                <p className="text-ink-faint font-mono text-[13px]">
                                   —
                                 </p>
-                                <p className="text-faint mt-1 text-[12px]">
+                                <p className="text-ink-faint mt-1 text-[12px]">
                                   Not open yet
                                 </p>
                               </>
@@ -272,10 +272,10 @@ export default async function FacultyAssignmentsPage({
                               <>
                                 <p className="text-ink font-mono text-[13px] tabular-nums">
                                   {submitted}
-                                  <span className="text-faint px-1">/</span>
+                                  <span className="text-ink-faint px-1">/</span>
                                   {enrolled}
                                 </p>
-                                <p className="text-faint mt-1 text-[12px]">
+                                <p className="text-ink-faint mt-1 text-[12px]">
                                   submitted
                                 </p>
                               </>
@@ -283,7 +283,7 @@ export default async function FacultyAssignmentsPage({
                           </TableCell>
 
                           <TableCell>
-                            <p className="text-faint font-mono text-[13px]">
+                            <p className="text-ink-faint font-mono text-[13px]">
                               {a.gradesReleased ? 'Published' : '—'}
                             </p>
                           </TableCell>

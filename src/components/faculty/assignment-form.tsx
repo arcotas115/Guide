@@ -118,11 +118,11 @@ export function AssignmentForm({
           <h1 className="screen-title text-ink">
             {mode === 'create' ? 'New assignment' : 'Edit assignment'}
           </h1>
-          <p className="text-subtle mt-2 text-[14px]">{subtitle}</p>
+          <p className="text-ink-soft mt-2 text-[14px]">{subtitle}</p>
         </div>
         <Link
           href={`/faculty/courses/${offeringId}/assignments`}
-          className="text-subtle hover:text-ink pt-2 text-[14px] transition-colors"
+          className="text-ink-soft hover:text-ink pt-2 text-[14px] transition-colors"
         >
           Cancel
         </Link>
@@ -168,7 +168,7 @@ export function AssignmentForm({
             </p>
             {/* Wired as a field, honest about being inert. An upload control
                 that silently drops the file would be far worse. */}
-            <div className="border-card-border bg-canvas text-subtle mt-2 rounded-lg border border-dashed px-4 py-7 text-center text-[13.5px] leading-relaxed">
+            <div className="border-card-border bg-canvas text-ink-soft mt-2 rounded-lg border border-dashed px-4 py-7 text-center text-[13.5px] leading-relaxed">
               Attaching starter files arrives with submissions, in the next
               step.
               <br />
@@ -216,7 +216,7 @@ export function AssignmentForm({
                 disabled={!allowLate}
               />
             </div>
-            <p className="text-subtle text-[12.5px] leading-relaxed">
+            <p className="text-ink-soft text-[12.5px] leading-relaxed">
               Leave <span className="text-ink-muted">Opens</span> blank to make
               it available immediately.
               {allowLate
@@ -263,7 +263,7 @@ export function AssignmentForm({
               <p className="text-ink text-[14.5px] leading-snug font-medium">
                 Automatic penalty for late work
               </p>
-              <p className="text-subtle mt-1 text-[12.5px] leading-relaxed">
+              <p className="text-ink-soft mt-1 text-[12.5px] leading-relaxed">
                 Stored with the assignment. Whether it is applied to a mark or
                 only shown to you is decided when grading is built.
               </p>
@@ -289,7 +289,7 @@ export function AssignmentForm({
                   className="h-9 w-20 font-mono"
                   {...register('latePenaltyPctPerDay')}
                 />
-                <span className="text-subtle text-[12.5px]">% per day</span>
+                <span className="text-ink-soft text-[12.5px]">% per day</span>
               </div>
               {errors.latePenaltyPctPerDay?.message ? (
                 <p className="text-rust mt-1.5 text-[12.5px]">

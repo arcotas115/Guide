@@ -67,7 +67,7 @@ export function TopBar({
           {institutionName}
         </span>
         <span className="bg-card-border h-5 w-px shrink-0" aria-hidden />
-        <span className="text-subtle shrink-0 text-[14px]">{surface}</span>
+        <span className="text-ink-soft shrink-0 text-[14px]">{surface}</span>
       </div>
 
       <div className="flex shrink-0 items-center gap-4">
@@ -75,7 +75,7 @@ export function TopBar({
         <div className="hidden text-right sm:block">
           <p className="text-ink text-[13.5px] font-semibold">{personName}</p>
           {personSubtitle ? (
-            <p className="text-subtle text-[12.5px]">{personSubtitle}</p>
+            <p className="text-ink-soft text-[12.5px]">{personSubtitle}</p>
           ) : null}
         </div>
         <span className="bg-canvas border-card-border text-ink-muted flex size-9 shrink-0 items-center justify-center rounded-full border font-mono text-[12px]">
@@ -140,7 +140,7 @@ export function SidebarItem({
             'shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[11px] tabular-nums',
             badgeTone === 'urgent'
               ? 'bg-rust-bg text-rust'
-              : 'bg-canvas text-faint',
+              : 'bg-canvas text-ink-faint',
           )}
         >
           {badge}
@@ -154,7 +154,7 @@ export function SidebarItem({
   if (muted || !href) {
     return (
       <span
-        className={cn(shared, 'text-faint cursor-default')}
+        className={cn(shared, 'text-ink-faint cursor-default')}
         title="Coming in a later milestone"
       >
         {inner}

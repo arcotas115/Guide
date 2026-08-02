@@ -448,12 +448,23 @@ create policy assignment_files_teacher_write on public.assignment_files
 
 
 -- ---------- submissions -----------------------------------------------------
--- TODO(Milestone 1 — grading): RLS filters ROWS, not COLUMNS. A student can
--- read their own submission row, which includes `grade`/`feedback` even while
--- assignments.grades_released is false. Nothing leaks today (no grades exist
--- yet), but before grading ships, students must read submissions through a
--- masking view that nulls grade/feedback until grades_released -- with direct
--- SELECT on those columns revoked. Do not ship grading without that.
+-- RESOLVED IN 0004 — this is safe, and the note below explains why, because a
+-- migration file is where someone looks when they want to know.
+--
+-- The original TODO here was correct when written: RLS filters ROWS, not
+-- COLUMNS, so a student reading their own submission row would also have read
+-- `grade` and `feedback` on it while assignments.grades_released was still
+-- false. It said "do not ship grading without a masking view".
+--
+-- 0004 solved it a better way than the masking view it proposed: the grade
+-- moved OFF this table entirely, onto `submission_grades`. There are no
+-- grade/feedback columns on `submissions` any more, so there is nothing to
+-- mask. Visibility became a pure ROW-level question -- exactly what RLS answers
+-- well -- and submission_grades carries the tightest policy in the schema: a
+-- student may read a grade row only when the parent assignment has
+-- grades_released = true. Asserted directly in supabase/tests/rls.test.mjs.
+--
+-- Grading is safe to ship. Do not re-add grade columns to this table.
 create policy submissions_read on public.submissions
   for select to authenticated
   using (

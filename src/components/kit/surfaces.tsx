@@ -37,7 +37,7 @@ export function Eyebrow({
   ...props
 }: React.ComponentProps<'p'>) {
   return (
-    <p className={cn('eyebrow text-faint', className)} {...props}>
+    <p className={cn('eyebrow text-ink-faint', className)} {...props}>
       {children}
     </p>
   );
@@ -92,7 +92,7 @@ export function SectionRow({
         <p
           className={cn(
             'text-[15.5px] leading-tight font-semibold tracking-[-0.02em]',
-            muted ? 'text-faint' : 'text-ink',
+            muted ? 'text-ink-faint' : 'text-ink',
           )}
         >
           {title}
@@ -101,7 +101,7 @@ export function SectionRow({
           <p
             className={cn(
               'mt-1 text-[13.5px] leading-snug',
-              urgent ? 'text-rust' : 'text-subtle',
+              urgent ? 'text-rust' : 'text-ink-soft',
             )}
           >
             {subtitle}
@@ -134,7 +134,7 @@ export function EmptyState({
         {title}
       </p>
       {body ? (
-        <p className="text-subtle mx-auto mt-2 max-w-sm text-[14px] leading-relaxed">
+        <p className="text-ink-soft mx-auto mt-2 max-w-sm text-[14px] leading-relaxed">
           {body}
         </p>
       ) : null}

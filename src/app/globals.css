@@ -19,15 +19,13 @@
   --card-border: #eae7df; /* 1px card and row borders */
   --chevron: #c0c4bf;     /* the disclosure chevron on tappable rows */
 
-  /* Ink.
-     DESIGN.md fixes the surfaces but not the text ramp, so these are carried
-     over from the prototype unchanged. Only the top of the ramp is a rule:
-     --ink is #14171A, never #000000. */
-  --ink: #14171a;         /* primary text */
-  --ink-soft: #303531;    /* body prose */
-  --ink-muted: #55605a;   /* secondary text */
-  --subtle: #7a7e79;      /* row subtitles, hints */
-  --faint: #9a9e98;       /* metadata, disabled */
+  /* Ink ramp — names and values both from DESIGN.md §1.
+     Never #000000: the warmth is the point. */
+  --ink: #14171a;        /* primary text, headings */
+  --ink-strong: #303531; /* emphasised body */
+  --ink-muted: #55605a;  /* secondary lines, subtitles */
+  --ink-soft: #7a7e79;   /* metadata, timestamps */
+  --ink-faint: #9a9e98;  /* disabled and not-yet-available */
 
   /* Rust — the attention colour. Overdue, attendance below threshold,
      incomplete admin setup. A third use destroys the signal. */
@@ -54,7 +52,7 @@
   --secondary: var(--canvas);
   --secondary-foreground: var(--ink);
   --muted: var(--canvas);
-  --muted-foreground: var(--subtle);
+  --muted-foreground: var(--ink-soft);
   --accent: var(--canvas);
   --accent-foreground: var(--ink);
   --destructive: var(--rust);
@@ -63,7 +61,7 @@
      interactive control, and at 32px a switch track needs to be visible
      against a cream card, not merely present in the DOM. */
   --input: #d5d2c8;
-  --ring: var(--subtle);
+  --ring: var(--ink-soft);
   --radius: 0.75rem; /* DESIGN.md §3: card radius 12 */
 }
 
@@ -77,10 +75,10 @@
 
   /* Ink */
   --color-ink: var(--ink);
-  --color-ink-soft: var(--ink-soft);
+  --color-ink-strong: var(--ink-strong);
   --color-ink-muted: var(--ink-muted);
-  --color-subtle: var(--subtle);
-  --color-faint: var(--faint);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
 
   /* Attention + affirmation */
   --color-rust: var(--rust);
@@ -130,18 +128,17 @@
    adding them is a schema change this session is not allowed to make — so the
    other three are derived here with color-mix.
 
-   HOW CLOSE THAT GETS, measured rather than assumed. Against CS301 #4C5BD4:
+   DESIGN.md §4 now records this as the decision: only `color` is stored, and
+   the other three are derived at render time. Do not add columns for them —
+   one colour per course is all an administrator should have to choose, and
+   three stored derivatives are three values that can drift from the fourth.
+
+   HOW CLOSE IT GETS, measured rather than assumed. Against CS301 #4C5BD4:
      tint        recorded #EEF0FD   derived  9% -> #EFF0FB
      wash        recorded #F5F6FE   derived  5% -> #F6F7FD
      washBorder  recorded #E6E9FA   derived 14% -> #E6E8F9
-   Within a point or two per channel, but NOT identical: the recorded values
-   are hand-picked with a slight blue bias, which no single white-mix ratio
-   reproduces. Flagged for the spec — either the three become columns, or
-   DESIGN.md records that they are derived.
-
-   Deriving does buy something real: an admin picking a shade the designers
-   never saw still gets a coherent card, and a new course colour stays an
-   UPDATE rather than a deploy.
+   Within a point or two per channel — below what anyone perceives on a flat
+   tint, and the consistency of one source is worth more than an exact match.
 
    Usage: <div className="course-scope" style={{ '--course-color': hex }}>
    ========================================================================== */

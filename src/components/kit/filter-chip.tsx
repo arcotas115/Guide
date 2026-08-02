@@ -30,7 +30,7 @@ export function FilterChip({
         'inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[13px] transition-colors',
         active
           ? 'bg-ink text-canvas font-medium'
-          : 'text-ink-muted border-card-border bg-card hover:border-subtle border',
+          : 'text-ink-muted border-card-border bg-card hover:border-ink-soft border',
       )}
     >
       <span>{label}</span>
@@ -39,7 +39,7 @@ export function FilterChip({
       <span
         className={cn(
           'font-mono text-[11px] tabular-nums',
-          active ? 'text-canvas/70' : 'text-faint',
+          active ? 'text-canvas/70' : 'text-ink-faint',
         )}
       >
         {count}

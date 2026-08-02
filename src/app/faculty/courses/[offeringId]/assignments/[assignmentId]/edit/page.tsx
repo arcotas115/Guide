@@ -52,7 +52,7 @@ export default async function EditAssignmentPage({
               <p className="text-ink text-[14.5px] font-medium">
                 Stop accepting submissions
               </p>
-              <p className="text-subtle mt-1 text-[12.5px] leading-relaxed">
+              <p className="text-ink-soft mt-1 text-[12.5px] leading-relaxed">
                 Students keep the assignment and anything they submitted. This
                 does not publish marks — that is a separate step.
               </p>

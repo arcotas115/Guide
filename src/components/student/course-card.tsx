@@ -42,7 +42,7 @@ export function CourseCard({
                 `CS301Operating SystemsSection A` — DESIGN.md §3. */}
             <p className="course-code">{offering.courseCode}</p>
             <p className="row-title text-ink mt-1.5">{offering.courseTitle}</p>
-            <p className="text-subtle mt-1.5 text-[14px]">{subtitle}</p>
+            <p className="text-ink-soft mt-1.5 text-[14px]">{subtitle}</p>
           </div>
           <Chevron />
         </div>

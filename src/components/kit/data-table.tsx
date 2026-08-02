@@ -48,7 +48,7 @@ export function DataTable({
                   key={c.label}
                   scope="col"
                   className={cn(
-                    'eyebrow text-faint px-5 py-3 font-normal',
+                    'eyebrow text-ink-faint px-5 py-3 font-normal',
                     c.align === 'right' && 'text-right',
                   )}
                 >
@@ -89,10 +89,10 @@ export function TableGroupHeader({
           <div className="flex items-baseline gap-3">
             <span className="eyebrow text-ink-muted">{title}</span>
             {hint ? (
-              <span className="text-faint text-[12px]">{hint}</span>
+              <span className="text-ink-faint text-[12px]">{hint}</span>
             ) : null}
           </div>
-          <span className="text-faint font-mono text-[11px] tabular-nums">
+          <span className="text-ink-faint font-mono text-[11px] tabular-nums">
             {count} {count === 1 ? 'item' : 'items'}
           </span>
         </div>
@@ -158,7 +158,7 @@ export function StatePill({
       className={cn(
         'inline-flex items-center rounded-md px-2.5 py-1 text-[12.5px] font-medium',
         tone === 'neutral' && 'bg-canvas text-ink-muted border-card-border border',
-        tone === 'quiet' && 'bg-canvas text-faint border-card-border border',
+        tone === 'quiet' && 'bg-canvas text-ink-faint border-card-border border',
       )}
       style={
         tone === 'course'
