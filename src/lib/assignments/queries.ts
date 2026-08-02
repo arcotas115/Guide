@@ -27,6 +27,13 @@ export type OfferingSummary = {
   courseColor: string;
   credits: number;
   termName: string;
+  /**
+   * Who teaches it. Named rather than "your professor" because naming the
+   * person is the difference between a system talking and a person talking,
+   * which is the tonal premise of the whole product. Null when an offering has
+   * no professor assigned yet — an admin state the copy has to survive.
+   */
+  professorName: string | null;
 };
 
 export type FacultyAssignment = {
@@ -58,7 +65,8 @@ export type StudentAssignment = FacultyAssignment & {
 const OFFERING_SELECT = `
   id, section, deleted_at,
   courses ( code, title, color, credits, deleted_at ),
-  terms ( name )
+  terms ( name ),
+  teaching_assignments ( profiles ( full_name ) )
 ` as const;
 
 const ASSIGNMENT_COLUMNS = `
@@ -104,6 +112,9 @@ type OfferingRow = {
     deleted_at: string | null;
   } | null;
   terms: { name: string } | null;
+  teaching_assignments:
+    | Array<{ profiles: { full_name: string } | { full_name: string }[] | null }>
+    | null;
 };
 
 /**
@@ -131,6 +142,10 @@ function toOfferingSummary(
     courseColor: course.color,
     credits: course.credits,
     termName: term?.name ?? '',
+    // Co-taught offerings are legal (SPEC §2), so this takes the first. A
+    // "Prof. A and Prof. B" line is a copy decision for whenever co-teaching
+    // actually ships.
+    professorName: one(one(row.teaching_assignments)?.profiles ?? null)?.full_name ?? null,
   };
 }
 

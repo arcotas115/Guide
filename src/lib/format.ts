@@ -156,3 +156,63 @@ function zoneOffsetMs(at: Date, timeZone: string): number {
   );
   return asIfUtc - at.getTime();
 }
+
+/**
+ * Midnight at the start of a day, N days from `at`, in the institution's zone.
+ *
+ * The arithmetic is done on the CALENDAR DATE and only then converted to an
+ * instant. Adding `n * 86_400_000` milliseconds instead would be wrong across
+ * any daylight-saving transition: a "day" is 23 or 25 hours twice a year in
+ * most of the world, and To-Do's buckets are exactly the kind of thing that
+ * would be quietly off by an hour for one day each spring.
+ *
+ * India has no DST, so this is currently indistinguishable — which is precisely
+ * why it is worth getting right now rather than when the second country arrives.
+ */
+export function startOfDayInZone(
+  at: Date,
+  timeZone: string,
+  addDays = 0,
+): Date {
+  const [y, m, d] = toDateTimeLocalValue(at, timeZone)
+    .slice(0, 10)
+    .split('-')
+    .map(Number) as [number, number, number];
+
+  // Date.UTC normalises overflow (32 January becomes 1 February), so this
+  // needs no month-length or leap-year handling of its own.
+  const shifted = new Date(Date.UTC(y, m - 1, d + addDays));
+  const iso = shifted.toISOString().slice(0, 10);
+
+  return fromDateTimeLocalValue(`${iso}T00:00`, timeZone)!;
+}
+
+/**
+ * "Sat 2 Aug" — a weekday and date, for a deadline further out than today.
+ *
+ * en-IN renders this as "Sat, 2 Aug". The comma is dropped because the line it
+ * appears in already has one ("Due Sat 2 Aug, 6:00 pm") and two commas in six
+ * words reads like a list rather than a date.
+ */
+export function formatWeekdayDay(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat(LOCALE, {
+    timeZone,
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  })
+    .format(date)
+    .replace(/,\s*/, ' ');
+}
+
+/** "11:59 pm" on its own, for when the day is already established by context. */
+export function formatTime(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat(LOCALE, {
+    timeZone,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+    .format(date)
+    .toLowerCase();
+}

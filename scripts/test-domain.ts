@@ -28,6 +28,8 @@ import {
   assignmentToFormValues,
 } from '../src/lib/assignments/defaults';
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from '../src/lib/timezone';
+import { bucketFor, bucketBy, deadlineLabel } from '../src/lib/todo/buckets';
+import { startOfDayInZone } from '../src/lib/format';
 
 /** The institution's zone. Passed explicitly everywhere, never defaulted — see
  *  the note in src/lib/format.ts about why there is no fallback. */
@@ -227,6 +229,76 @@ console.log('\n\x1b[1mTIMEZONE IS CONFIG, NOT A CONSTANT\x1b[0m');
   check('a legacy but well-formed alias does', isValidTimeZone('US/Eastern'), true);
   check('an empty string does not', isValidTimeZone(''), false);
   check('untrimmed input does not', isValidTimeZone(' Asia/Kolkata '), false);
+}
+
+// ============================================================================
+console.log('\n\x1b[1mTO-DO BUCKETS — boundaries, in the institution zone\x1b[0m');
+{
+  // 12:00 noon IST on 31 July. Every boundary below is a calendar edge WHERE
+  // THE STUDENT IS, not where the server is — on Vercel the server is UTC,
+  // which would put every Indian evening deadline into "tomorrow" for five and
+  // a half hours a day.
+  const at = (iso: string) => new Date(iso);
+  const b = (iso: string) => bucketFor(at(iso), NOW, IST);
+
+  check('a minute ago is Overdue', b('2026-07-31T11:59:00+05:30'), 'overdue');
+  check('later today is Today', b('2026-07-31T18:00:00+05:30'), 'today');
+
+  // THE BOUNDARY THE BRIEF NAMES. 11:59 pm tonight is Today; 12:01 am tomorrow
+  // is not.
+  check('11:59 pm tonight is Today, not This week', b('2026-07-31T23:59:00+05:30'), 'today');
+  check('12:01 am tomorrow is NOT Today', b('2026-08-01T00:01:00+05:30'), 'week');
+  check('...and midnight exactly belongs to tomorrow', b('2026-08-01T00:00:00+05:30'), 'week');
+
+  check('six days out is This week', b('2026-08-06T09:00:00+05:30'), 'week');
+  check('seven days out has become Later', b('2026-08-07T09:00:00+05:30'), 'later');
+
+  // The same instants read differently in another zone — which is the proof
+  // that the zone is actually being used rather than the server's.
+  check('11:59 pm IST is Today in Kolkata', bucketFor(at('2026-07-31T23:59:00+05:30'), NOW, 'Asia/Kolkata'), 'today');
+  check('...and the SAME instant is still Today in New York (it is 2:29 pm there)',
+    bucketFor(at('2026-07-31T23:59:00+05:30'), NOW, 'America/New_York'), 'today');
+  check('...but 1 am IST tomorrow is still "today" in New York (3:30 pm)',
+    bucketFor(at('2026-08-01T01:00:00+05:30'), NOW, 'America/New_York'), 'today');
+
+  // Empty buckets must not render.
+  const grouped = bucketBy(
+    [{ d: at('2026-07-30T09:00:00+05:30') }, { d: at('2026-07-31T18:00:00+05:30') }],
+    (i) => i.d, NOW, IST,
+  );
+  check('only non-empty buckets are returned', grouped.length, 2);
+  check('...in urgency order, Overdue first', grouped[0]?.key, 'overdue');
+  check('...and no "Today (0)" header exists',
+    grouped.every((g) => g.items.length > 0), true);
+
+  // Within a bucket, soonest first.
+  const sorted = bucketBy(
+    [{ d: at('2026-08-05T09:00:00+05:30') }, { d: at('2026-08-03T09:00:00+05:30') }],
+    (i) => i.d, NOW, IST,
+  );
+  check('items inside a bucket are soonest-first',
+    sorted[0]?.items[0]?.d.toISOString(), at('2026-08-03T09:00:00+05:30').toISOString());
+
+  // The copy, phrased for the bucket it is in.
+  check('an overdue item counts whole days',
+    deadlineLabel(at('2026-07-30T23:00:00+05:30'), NOW, IST), 'Overdue by 1 day');
+  check('...even when fewer than 24 hours have passed',
+    deadlineLabel(at('2026-07-30T13:00:00+05:30'), NOW, IST), 'Overdue by 1 day');
+  check('...and today\'s overdue says the time instead',
+    deadlineLabel(at('2026-07-31T09:00:00+05:30'), NOW, IST), 'Overdue · was due 9:00 am');
+  check('a due-today item names the time',
+    deadlineLabel(at('2026-07-31T23:59:00+05:30'), NOW, IST), 'Due today, 11:59 pm');
+  check('a later item names the weekday',
+    deadlineLabel(at('2026-08-02T18:00:00+05:30'), NOW, IST), 'Due Sun 2 Aug, 6:00 pm');
+
+  // Day arithmetic is on the CALENDAR, not on milliseconds — so a month end
+  // and a leap day do not need special handling.
+  check('day arithmetic rolls over a month end',
+    startOfDayInZone(at('2026-01-31T10:00:00+05:30'), IST, 1).toISOString(),
+    at('2026-02-01T00:00:00+05:30').toISOString());
+  check('...and handles a leap day',
+    startOfDayInZone(at('2028-02-28T10:00:00+05:30'), IST, 1).toISOString(),
+    at('2028-02-29T00:00:00+05:30').toISOString());
 }
 
 // ============================================================================

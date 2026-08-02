@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import { requireRole } from '@/lib/auth';
 import { listOfferingsForStudent } from '@/lib/assignments/queries';
-import { SignOutButton } from '@/components/sign-out-button';
 import { CourseCard } from '@/components/student/course-card';
 import { EmptyState } from '@/components/kit/surfaces';
 
@@ -26,7 +25,7 @@ export default async function StudentHome() {
 
   return (
     <div className="mx-auto w-full max-w-md px-5 py-8">
-      <header className="flex items-start justify-between gap-4">
+      <header>
         <div>
           <h1 className="screen-title text-ink">Hello, {firstName}</h1>
           {/* Explicit separator element between the institution and the roll
@@ -43,7 +42,6 @@ export default async function StudentHome() {
             ) : null}
           </p>
         </div>
-        <SignOutButton />
       </header>
 
       <h2 className="eyebrow text-ink-faint mt-9">Your courses</h2>
@@ -69,9 +67,6 @@ export default async function StudentHome() {
         </ul>
       )}
 
-      {/* The five-tab bottom bar (Home · Calendar · To-Do · Notifications ·
-          More) arrives with the features behind it. One tab that works beats
-          five that mostly do not. */}
     </div>
   );
 }

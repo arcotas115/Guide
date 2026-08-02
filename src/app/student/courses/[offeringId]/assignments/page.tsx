@@ -9,6 +9,7 @@ import {
 } from '@/lib/assignments/queries';
 import { CourseHeader } from '@/components/student/course-header';
 import { Card, Chevron, EmptyState } from '@/components/kit/surfaces';
+import { SubmittedTick } from '@/components/student/submitted-tick';
 import { STATE_STYLES } from '@/lib/assignments/state';
 import { formatDay } from '@/lib/format';
 
@@ -89,16 +90,10 @@ export default async function StudentAssignmentsPage({
                           {a.grade}/{a.marks}
                         </span>
                       ) : a.submittedAt ? (
-                        // The persistent ✓ (SPEC.md §3.3) — quiet, and present
-                        // everywhere the assignment appears, so nobody has to
-                        // wonder whether it went through.
-                        <span
-                          className="bg-moss-bg text-moss-deep flex size-7 shrink-0 items-center justify-center rounded-full text-[13px]"
-                          title="Submitted"
-                          aria-label="Submitted"
-                        >
-                          ✓
-                        </span>
+                        // One component, used on every surface — see
+                        // submitted-tick.tsx for why it is not three
+                        // conditionals in three files.
+                        <SubmittedTick state={a.derived.state} />
                       ) : a.derived.state === 'upcoming' ? (
                         <span className="eyebrow text-ink-faint shrink-0">
                           Upcoming

@@ -158,7 +158,7 @@ export default async function StudentAssignmentPage({
             submission={submission}
             timeZone={tz}
             allowMultiple={assignment.allowMultipleAttempts}
-            professorName={null}
+            professorName={offering.professorName}
           />
         ) : null}
 

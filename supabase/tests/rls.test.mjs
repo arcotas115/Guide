@@ -1241,6 +1241,144 @@ console.log(`\n\x1b[1mSUBMITTING — one way in, and it checks the deadline\x1b[
 }
 
 // ============================================================================
+// TO-DO (1B-ii) — the first query that aggregates ACROSS offerings
+//
+// Which makes it the first place a tenancy or soft-delete mistake shows up as
+// somebody else's work in a student's list. The application query carries no
+// enrolment filter, no draft filter and no deleted filter of its own — all four
+// are RLS — so each is asserted here against exactly the shape that query runs.
+// ============================================================================
+console.log(`\n\x1b[1mTO-DO — what a cross-offering query may return\x1b[0m`);
+{
+  // The shape src/lib/todo/queries.ts issues: every open, live assignment in my
+  // institution, with my own submissions embedded.
+  const todoFor = (who) =>
+    asUser(who, async () => {
+      const { rows } = await db.query(`
+        select a.id, a.title
+        from public.assignments a
+        where a.institution_id = public.current_institution_id()
+          and a.status = 'open'
+          and a.deleted_at is null
+          and not exists (
+            select 1 from public.submissions s
+            where s.assignment_id = a.id
+          )
+        order by a.due_at
+      `);
+      return rows.map((r) => r.title);
+    });
+
+  // Its OWN fixture, not the seed's. The SUBMITTING group above already
+  // submitted for studA1 on asgOpen, which would leave this student's To-Do
+  // empty — and every cascade assertion below would then pass vacuously by
+  // going from nothing to nothing.
+  const todoAsg = crypto.randomUUID();
+  await db.query(
+    `insert into public.assignments (id, institution_id, offering_id, created_by, title, marks, due_at, status)
+       values ($1,$2,$3,$4,'To-Do fixture',10, now() + interval '2 days','open')`,
+    [todoAsg, ids.instA, ids.offerA, ids.profA]);
+
+  const baseline = await todoFor(ids.studA1);
+  check('a student sees their own open assignments', baseline.length > 0, true);
+  check('...including the one just set', baseline.includes('To-Do fixture'), true);
+
+  // ---- criterion 2: drafts never appear -----------------------------------
+  check('a draft assignment never appears',
+    baseline.some((t) => t.includes('Assignment 6')), false);
+
+  // ---- criterion 1: only offerings they are enrolled in --------------------
+  {
+    // A second offering in the SAME institution that studA1 is NOT in.
+    const otherOffer = crypto.randomUUID();
+    const otherCourse = crypto.randomUUID();
+    const otherAsg = crypto.randomUUID();
+    await db.query(
+      `insert into public.courses (id, institution_id, department_id, code, title, credits, color)
+         values ($1,$2,$3,'CS777','Not mine',3,'#0E7C86')`,
+      [otherCourse, ids.instA, ids.deptA]);
+    await db.query(
+      `insert into public.course_offerings (id, institution_id, course_id, term_id, section)
+         values ($1,$2,$3,$4,'B')`, [otherOffer, ids.instA, otherCourse, ids.termA]);
+    await db.query(
+      `insert into public.assignments (id, institution_id, offering_id, created_by, title, marks, due_at, status)
+         values ($1,$2,$3,$4,'Someone else''s homework',10,'2026-09-01','open')`,
+      [otherAsg, ids.instA, otherOffer, ids.profA]);
+
+    check('an assignment from an offering they are NOT enrolled in never appears',
+      (await todoFor(ids.studA1)).includes("Someone else's homework"), false);
+
+    await db.query(`delete from public.assignments where id = $1`, [otherAsg]);
+    await db.query(`delete from public.course_offerings where id = $1`, [otherOffer]);
+    await db.query(`delete from public.courses where id = $1`, [otherCourse]);
+  }
+
+  // ---- criterion 1 again: another institution ------------------------------
+  check('a student at another college has a completely separate list',
+    (await todoFor(ids.studB1)).some((t) => baseline.includes(t)), false);
+
+  // ---- criterion 4: the case 0008 was written for -------------------------
+  //
+  // This is the exact cross-offering query that motivated the cascade
+  // migration, so it is asserted here rather than only at the offering level.
+  await db.query(`update public.course_offerings set deleted_at = now() where id = $1`, [ids.offerA]);
+  check('soft-deleting the OFFERING empties their To-Do',
+    (await todoFor(ids.studA1)).length, 0);
+  await db.query(`update public.course_offerings set deleted_at = null where id = $1`, [ids.offerA]);
+
+  await db.query(`update public.courses set deleted_at = now() where id = $1`, [ids.courseA]);
+  check('...and so does soft-deleting the COURSE above it',
+    (await todoFor(ids.studA1)).length, 0);
+  await db.query(`update public.courses set deleted_at = null where id = $1`, [ids.courseA]);
+
+  await db.query(`update public.terms set deleted_at = now() where id = $1`, [ids.termA]);
+  check('...and the TERM above that',
+    (await todoFor(ids.studA1)).length, 0);
+  await db.query(`update public.terms set deleted_at = null where id = $1`, [ids.termA]);
+
+  check('...and restoring brings it all back',
+    (await todoFor(ids.studA1)).length, baseline.length);
+  check('...with the fixture among them',
+    (await todoFor(ids.studA1)).includes('To-Do fixture'), true);
+
+  // ---- criterion 3: submitting removes it ---------------------------------
+  //
+  // The property that makes the list trustworthy enough to be the screen a
+  // student opens first.
+  {
+    const before = await todoFor(ids.studA2);
+    const target = crypto.randomUUID();
+    await db.query(
+      `insert into public.assignments (id, institution_id, offering_id, created_by, title, marks, due_at, status)
+         values ($1,$2,$3,$4,'Hand me in',10, now() + interval '3 days','open')`,
+      [target, ids.instA, ids.offerA, ids.profA]);
+    check('a new open assignment appears',
+      (await todoFor(ids.studA2)).includes('Hand me in'), true);
+
+    await asUser(ids.studA2, () =>
+      db.query(`select public.submit_attempt($1, $2::jsonb)`,
+        [target, JSON.stringify([{ kind: 'text', text_body: 'done' }])]));
+
+    check('...and submitting removes it from To-Do',
+      (await todoFor(ids.studA2)).includes('Hand me in'), false);
+    check('...regardless of whether it has been graded — an attempt is enough',
+      (await todoFor(ids.studA2)).length, before.length);
+
+    await db.query(`delete from public.assignments where id = $1`, [target]);
+  }
+
+  await db.query(`delete from public.assignments where id = $1`, [todoAsg]);
+
+  // The index that actually serves this. It is NOT assignments_live_idx —
+  // that one leads on offering_id, and this query does not filter by offering
+  // at all. The tenant column is what narrows it.
+  check('the tenant column this query leads on is indexed',
+    await count(`select count(*)::int as n from pg_indexes
+                  where schemaname='public' and tablename='assignments'
+                    and indexdef like '%(institution_id)%'`) > 0, true);
+}
+
+// ============================================================================
 // STORAGE (0010) — the path convention IS the access-control rule
 // ============================================================================
 console.log(`\n\x1b[1mSTORAGE — the path is the rule\x1b[0m`);

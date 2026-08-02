@@ -9,8 +9,13 @@ import { cn } from '@/lib/utils';
  *
  * The `disabledReason` prop is the design rule made structural: "Disabled
  * states say what is missing, never just grey out." Passing it both disables
- * the control and prints the reason beneath, so it is not possible to ship a
- * greyed button whose cause is a mystery.
+ * the control and puts the reason IN it.
+ *
+ * It used to print the reason underneath a greyed button, which did both — and
+ * a hint sitting below a dead control reads as an error about something you
+ * already did, not as an instruction for what to do next. In the label it is
+ * the instruction: the button says "Add something to submit" until there is
+ * something, and then it says "Submit".
  */
 const base =
   'inline-flex items-center justify-center rounded-lg text-[14px] font-medium ' +
@@ -59,20 +64,16 @@ export function Button({
   const disabled = props.disabled || Boolean(disabledReason);
 
   return (
-    <span className={cn(fullWidth && 'block w-full')}>
-      <button
-        {...props}
-        disabled={disabled}
-        className={cn(buttonClass({ variant, size, fullWidth }), className)}
-      >
-        {children}
-      </button>
-      {disabledReason ? (
-        <span className="text-ink-soft mt-1.5 block text-[12.5px] leading-relaxed">
-          {disabledReason}
-        </span>
-      ) : null}
-    </span>
+    <button
+      {...props}
+      disabled={disabled}
+      // The reason is also the accessible name, so a screen reader hears the
+      // instruction rather than a label that no longer applies.
+      aria-label={disabledReason ?? undefined}
+      className={cn(buttonClass({ variant, size, fullWidth }), className)}
+    >
+      {disabledReason ?? children}
+    </button>
   );
 }
 
