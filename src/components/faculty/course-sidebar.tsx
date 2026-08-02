@@ -20,7 +20,7 @@ import { ButtonLink } from '@/components/kit/button';
 const SECTIONS = [
   { slug: 'info', label: 'Course info' },
   { slug: 'assignments', label: 'Assignments', live: true },
-  { slug: 'submissions', label: 'Submissions' },
+  { slug: 'submissions', label: 'Submissions', live: true },
   { slug: 'announcements', label: 'Announcements' },
   { slug: 'files', label: 'Files' },
   { slug: 'attendance', label: 'Attendance' },

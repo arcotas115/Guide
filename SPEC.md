@@ -4,6 +4,13 @@ This is the authoritative spec for the Campus app. Read it before building.
 Companion: `BUILD_RULES.md` (operating rules and stack). Where this
 spec and code disagree, this spec wins — update it if requirements change.
 
+**Revision 8 (Submissions table, 1C-i).** No schema change. Two decisions recorded: the
+late penalty is **shown, never applied** (see Decisions below, replacing the open question
+carried since 1A), and `hide_names_while_grading` binds to the **Submissions table as well
+as SpeedGrader** — §3.7 described it as a SpeedGrader behaviour, but a professor who can
+read the names on the table simply reads them there first, which makes the anonymity in
+SpeedGrader theatre. Search "Revision 8".
+
 **Revision 7 (submitting, `0009_submit_attempts.sql` + `0010_storage.sql`).** Three
 changes: `submissions.is_late` is **dropped** and late-ness derived per attempt; a new
 `submission_attempts` table makes an attempt an entity; and submitting moves out of RLS
@@ -715,12 +722,26 @@ path.
   A team assignment has ONE `submissions` row per team, therefore ONE
   `submission_grades` row per team. There is no fan-out write left to make atomic;
   every member reads the same row. The original concern no longer applies.
-- **Late penalty application — DEFERRED to Milestone 1C.** `late_penalty_pct_per_day`
-  is stored from 1A but nothing computes with it until SpeedGrader exists. The open
-  question: does SpeedGrader auto-reduce the saved grade, or show the deduction as a
-  suggestion the professor accepts? Recommendation: SHOW, do not apply. Silently
-  altering a professor's number is exactly the kind of thing that costs trust, and
-  trust is the product. Decide before writing SpeedGrader and record the answer here.
+- **Late penalty application — DECIDED, 2 August 2026 (Revision 8): SHOW, NEVER APPLY.**
+  `late_penalty_pct_per_day` is stored from 1A and nothing computes with it. The
+  Submissions table and SpeedGrader STATE the arithmetic next to a late attempt — *"2 days
+  late · 10% suggested"* — and the professor types whatever number they mean.
+  - **Why not auto-reduce.** Silently altering a professor's mark is exactly the kind of
+    thing that costs their trust, and their trust is the product. A number they did not
+    type, appearing against a student's name, is the worst version of that.
+  - It matches the principle already governing team-set locking in §3.6 — *"show a SOFT
+    warning… never hard-block. Professor decides; the app only flags."*
+  - A professor waiving the penalty for a student whose laptop died simply types the
+    number. There is no override UI to design, no audit question about who overrode what,
+    and no second code path.
+  - **Rounding: any part of a day counts as a day.** One hour late on a 5%/day assignment
+    suggests 5%. Rounding down would make the entire first day free, which is the opposite
+    of what a deadline is for. The ELAPSED time is shown alongside the suggestion — *"1
+    hour late · 5% suggested"* — precisely because that rounding is harsh at the edges, and
+    the professor should be able to see the harshness and judge it. The two deliberately
+    disagree: 49 hours reads "2 days" and charges three.
+  - The suggestion is capped at 100%. A deduction above that is not a deduction, it is a
+    fine. See `src/lib/submissions/penalty.ts`.
 - **Publish-grades atomicity.** "Publish all grades" flips assignment.grades_released =
   true in one write; individual post-publish corrections just update that submission's
   grade (visible immediately because grades_released is already true).

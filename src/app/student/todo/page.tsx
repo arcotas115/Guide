@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { requireRole } from '@/lib/auth';
 import { getTodo } from '@/lib/todo/queries';
 import { bucketBy, deadlineLabel } from '@/lib/todo/buckets';
-import { Card, Chevron, Eyebrow } from '@/components/kit/surfaces';
+import { Card, Chevron } from '@/components/kit/surfaces';
 
 export const metadata: Metadata = { title: 'To-Do · Campus' };
 
@@ -39,22 +39,27 @@ export default async function TodoPage() {
         <div className="mt-8 space-y-7">
           {buckets.map((bucket) => (
             <section key={bucket.key}>
-              <div className="flex items-baseline gap-2.5 px-1">
-                {/*
-                  RUST IS FOR OVERDUE ONLY. The bucket headings carry the
-                  urgency, which is exactly what lets every row below stay calm.
-                */}
-                <Eyebrow
-                  className={
-                    bucket.key === 'overdue' ? 'text-rust' : 'text-ink-faint'
-                  }
-                >
-                  {bucket.title}
-                </Eyebrow>
-                <span className="text-ink-faint font-mono text-[11px] tabular-nums">
-                  {bucket.items.length}
+              {/*
+                RUST IS FOR OVERDUE ONLY. The bucket headings carry the
+                urgency, which is exactly what lets every row below stay calm.
+
+                The separator is a RENDERED CHARACTER, not a flex gap. A gap is
+                invisible to anything that reads the text rather than the
+                layout — copy a heading and its count out of a flex row and you
+                get "OVERDUE1", because the space was never a character. A
+                middot is correct in both.
+              */}
+              <p
+                className={`eyebrow px-1 ${
+                  bucket.key === 'overdue' ? 'text-rust' : 'text-ink-faint'
+                }`}
+              >
+                {bucket.title}
+                <span className="px-1.5" aria-hidden>
+                  ·
                 </span>
-              </div>
+                <span className="tabular-nums">{bucket.items.length}</span>
+              </p>
 
               <Card className="mt-2">
                 <ul className="divide-card-border divide-y">

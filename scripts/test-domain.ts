@@ -29,6 +29,7 @@ import {
 } from '../src/lib/assignments/defaults';
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from '../src/lib/timezone';
 import { bucketFor, bucketBy, deadlineLabel } from '../src/lib/todo/buckets';
+import { penaltyFor, penaltyLabel } from '../src/lib/submissions/penalty';
 import { startOfDayInZone } from '../src/lib/format';
 
 /** The institution's zone. Passed explicitly everywhere, never defaulted — see
@@ -339,6 +340,46 @@ console.log('\n\x1b[1mFACULTY GROUPING — derived, never `status`\x1b[0m');
     at({ opensAt: null }),
     'waiting',
   );
+}
+
+// ============================================================================
+console.log('\n\x1b[1mLATE PENALTY — shown, never applied\x1b[0m');
+{
+  const due = new Date('2026-08-12T23:59:00+05:30');
+  const at = (h: number) => new Date(due.getTime() + h * 3_600_000);
+  const p = (h: number, pct = 5) => penaltyFor(at(h), due, pct);
+
+  check('on time suggests nothing', penaltyFor(at(-1), due, 10), null);
+  check('exactly on the deadline suggests nothing', penaltyFor(due, due, 10), null);
+  check('a zero-penalty assignment suggests nothing even when late', p(48, 0), null);
+
+  // ANY PART OF A DAY COUNTS AS A DAY. Rounding down would make the whole
+  // first day free, which is the opposite of what a deadline is for.
+  check('one minute late is already one day', penaltyFor(new Date(due.getTime() + 60_000), due, 5)?.daysLate, 1);
+  check('one hour late is one day', p(1)?.daysLate, 1);
+  check('...suggesting 5%', p(1)?.suggestedPct, 5);
+  check('23 hours late is still one day', p(23)?.daysLate, 1);
+  check('25 hours late is two days', p(25)?.daysLate, 2);
+  check('...suggesting 10%', p(25)?.suggestedPct, 10);
+
+  // The elapsed label deliberately DISAGREES with daysLate at the edges — that
+  // is what makes the harshness of the rounding visible to the professor.
+  check('...and says one hour, not one day, so the rounding is visible',
+    penaltyLabel(p(1)!), '1 hour late · 5% suggested');
+  check('exactly two days late reads plainly',
+    penaltyLabel(p(48, 10)!), '2 days late · 20% suggested');
+  // One hour into the third day charges a third day while the elapsed time
+  // still reads "2 days". The two are SUPPOSED to disagree — that gap is the
+  // whole reason the elapsed time is shown next to the suggestion.
+  check('...and an hour into day three charges three but still reads two',
+    penaltyLabel(p(49, 10)!), '2 days late · 30% suggested');
+  check('minutes are reported as minutes',
+    penaltyLabel(penaltyFor(new Date(due.getTime() + 40 * 60_000), due, 5)!),
+    '40 minutes late · 5% suggested');
+
+  // A deduction over 100% is not a deduction, it is a fine.
+  check('the suggestion is capped at 100%', p(24 * 30, 20)?.suggestedPct, 100);
+  check('a fractional rate does not produce a float tail', p(25, 12.5)?.suggestedPct, 25);
 }
 
 // ============================================================================

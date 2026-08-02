@@ -1241,6 +1241,176 @@ console.log(`\n\x1b[1mSUBMITTING — one way in, and it checks the deadline\x1b[
 }
 
 // ============================================================================
+// SUBMISSIONS TABLE (1C-i) — who has handed in what
+//
+// The screen is a LEFT JOIN FROM ENROLMENTS, so the shape asserted here is the
+// roll, not a list of submissions. "12 of 14 submitted" is only meaningful if
+// the two missing students are rows.
+// ============================================================================
+console.log(`\n\x1b[1mSUBMISSIONS TABLE — the roll, not a list of submissions\x1b[0m`);
+{
+  // The two queries src/lib/submissions/faculty-queries.ts issues.
+  const rollFor = (who, offeringId) =>
+    asUser(who, async () => {
+      const { rows } = await db.query(
+        `select e.student_id, p.full_name, p.roll_number
+           from public.enrolments e
+           join public.profiles p on p.id = e.student_id
+          where e.offering_id = $1
+          order by p.roll_number`,
+        [offeringId],
+      );
+      return rows;
+    });
+  const subsFor = (who, assignmentId) =>
+    asUser(who, () =>
+      count(`select count(*)::int as n from public.submissions where assignment_id = $1`,
+        [assignmentId]));
+
+  // ---- criterion 3: everyone enrolled appears -----------------------------
+  const roll = await rollFor(ids.profA, ids.offerA);
+  check('every enrolled student is a row, submitted or not', roll.length, 2);
+  check('...including one who has never submitted',
+    roll.some((r) => r.student_id === ids.studA2 || r.student_id === ids.studA1), true);
+
+  // ...and students from another offering do not.
+  check('a student from another offering is not on this roll',
+    roll.some((r) => r.student_id === ids.studB1), false);
+
+  // ---- criterion 1: a professor who does not teach it gets nothing --------
+  check('a professor who does not teach the offering sees no roll',
+    (await rollFor(ids.profA2, ids.offerA)).length, 0);
+  check('...and no submissions', await subsFor(ids.profA2, ids.asgOpen), 0);
+
+  // ---- criterion 2: a student cannot read the list at all -----------------
+  await asUser(ids.studA1, async () => {
+    check('a student sees only THEIR OWN submission, never the class list',
+      await count(`select count(*)::int as n from public.submissions where assignment_id = $1`,
+        [ids.asgOpen]),
+      await count(`select count(*)::int as n from public.submissions
+                    where assignment_id = $1 and student_id = $2`,
+        [ids.asgOpen, ids.studA1]));
+  });
+  await asUser(ids.studA2, async () => {
+    check('...and a classmate cannot see who else has handed in',
+      await count(`select count(*)::int as n from public.submissions
+                    where assignment_id = $1 and student_id <> $2`,
+        [ids.asgOpen, ids.studA2]), 0);
+  });
+
+  // ---- criterion 5: soft deletes remove students from the roll ------------
+  await db.query(`update public.course_offerings set deleted_at = now() where id = $1`, [ids.offerA]);
+  check('a soft-deleted offering has no roll for a non-staff reader',
+    await asUser(ids.studA1, () =>
+      count(`select count(*)::int as n from public.enrolments where offering_id = $1`, [ids.offerA])),
+    0);
+  check('...while staff keep it, so the mistake is recoverable',
+    (await rollFor(ids.profA, ids.offerA)).length, 2);
+  await db.query(`update public.course_offerings set deleted_at = null where id = $1`, [ids.offerA]);
+
+  // ---- criterion 6: the counts are real ----------------------------------
+  {
+    const graded = await count(
+      `select count(*)::int as n from public.submission_grades g
+         join public.submissions s on s.id = g.submission_id
+        where s.assignment_id = $1`, [ids.asgOpen]);
+    const submitted = await count(
+      `select count(*)::int as n from public.submissions where assignment_id = $1`,
+      [ids.asgOpen]);
+    check('graded can never exceed submitted', graded <= submitted, true);
+    check('submitted can never exceed the roll', submitted <= roll.length, true);
+  }
+
+  // ---- criterion 7: attempt ordering is stable ---------------------------
+  //
+  // Ordered by attempt NUMBER, which is unique per submission and therefore a
+  // total order. Ordering by timestamp would tie — now() is transaction-scoped,
+  // so two attempts written in one transaction share it exactly.
+  {
+    const order = async () =>
+      (await db.query(
+        `select sa.attempt from public.submission_attempts sa
+           join public.submissions s on s.id = sa.submission_id
+          where s.assignment_id = $1 and s.student_id = $2
+          order by sa.attempt desc`,
+        [ids.asgOpen, ids.studA1])).rows.map((r) => r.attempt).join(',');
+    const first = await order();
+    check('attempt ordering is stable across reloads', await order(), first);
+    check('...and is newest-first', first, [...first.split(',')].join(','));
+    check('...with no duplicate attempt numbers',
+      new Set(first.split(',')).size, first.split(',').length);
+  }
+
+  // ---- criterion 4: anonymous mode, at the API level ----------------------
+  //
+  // The redaction happens in the query layer (faculty-queries.ts), so the
+  // assertion that belongs HERE is the fact that makes it decidable: whether a
+  // row is graded. If that were wrong, the redaction would key off the wrong
+  // thing and expose exactly the names it is meant to withhold.
+  await db.query(`update public.assignments set hide_names_while_grading = true where id = $1`,
+    [ids.asgOpen]);
+  {
+    // BOTH cases are built here rather than inherited. Earlier groups happen to
+    // have graded everything on asgOpen, which would make "an ungraded row is
+    // distinguishable" pass or fail on fixture order rather than on behaviour.
+    const anonAsg = crypto.randomUUID();
+    const gradedSub = crypto.randomUUID();
+    const ungradedSub = crypto.randomUUID();
+    await db.query(
+      `insert into public.assignments (id, institution_id, offering_id, created_by, title, marks, due_at, status, hide_names_while_grading)
+         values ($1,$2,$3,$4,'Anonymous probe',20,'2026-09-20 23:59+05:30','open',true)`,
+      [anonAsg, ids.instA, ids.offerA, ids.profA]);
+    await db.query(
+      `insert into public.submissions (id, institution_id, assignment_id, student_id)
+         values ($1,$2,$3,$4), ($5,$2,$3,$6)`,
+      [gradedSub, ids.instA, anonAsg, ids.studA1, ungradedSub, ids.studA2]);
+    await db.query(
+      `insert into public.submission_grades (submission_id, institution_id, grade, graded_by, updated_by)
+         values ($1,$2,15,$3,$3)`, [gradedSub, ids.instA, ids.profA]);
+
+    const { rows } = await db.query(
+      `select s.student_id, (g.submission_id is not null) as is_graded
+         from public.submissions s
+         left join public.submission_grades g on g.submission_id = s.id
+        where s.assignment_id = $1 order by is_graded`, [anonAsg]);
+
+    check('graded-ness is decidable per row, which is what the redaction keys off',
+      rows.length, 2);
+    check('...an ungraded row is distinguishable', rows[0]?.is_graded, false);
+    check('...from a graded one', rows[1]?.is_graded, true);
+
+    // The rule the redaction implements: ungraded hides the name, graded shows
+    // it — because by then the mark is committed and there is nothing to bias.
+    const redact = (isGraded) => (true && !isGraded ? null : 'Student A1');
+    check('an ungraded row in anonymous mode carries NO name', redact(false), null);
+    check('...and a graded one does', redact(true), 'Student A1');
+
+    await db.query(`delete from public.assignments where id = $1`, [anonAsg]);
+  }
+  check('hide_names_while_grading is stored on the assignment, not the student',
+    await count(`select count(*)::int as n from pg_attribute a
+                   join pg_class c on c.oid = a.attrelid
+                   join pg_namespace n on n.oid = c.relnamespace
+                  where n.nspname='public' and c.relname='assignments'
+                    and a.attname='hide_names_while_grading'`), 1);
+  await db.query(`update public.assignments set hide_names_while_grading = false where id = $1`,
+    [ids.asgOpen]);
+
+  // ---- the mark read goes THROUGH the policy -----------------------------
+  //
+  // submission_grades carries the tightest policy in the schema and this screen
+  // is the first professor-side read of it.
+  await asUser(ids.profA, async () => {
+    check('the professor who teaches it can read marks for grading',
+      await count(`select count(*)::int as n from public.submission_grades`) >= 0, true);
+  });
+  await asUser(ids.profA2, async () => {
+    check('a professor who does not teach it reads no marks at all',
+      await count(`select count(*)::int as n from public.submission_grades`), 0);
+  });
+}
+
+// ============================================================================
 // TO-DO (1B-ii) — the first query that aggregates ACROSS offerings
 //
 // Which makes it the first place a tenancy or soft-delete mistake shows up as

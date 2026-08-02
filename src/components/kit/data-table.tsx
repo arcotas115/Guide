@@ -124,13 +124,17 @@ export function TableCell({
   children,
   align = 'left',
   className,
+  colSpan,
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   align?: 'left' | 'right';
   className?: string;
+  /** For a detail row that spans the remaining columns. */
+  colSpan?: number;
 }) {
   return (
     <td
+      colSpan={colSpan}
       className={cn(
         'px-5 py-4 align-top',
         align === 'right' && 'text-right',

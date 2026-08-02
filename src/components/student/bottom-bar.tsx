@@ -38,7 +38,10 @@ export function BottomBar() {
 
   return (
     <nav
-      className="border-card-border bg-card/95 fixed inset-x-0 bottom-0 z-20 border-t backdrop-blur"
+      // `absolute`, not `fixed`: fixed positions against the viewport, which on
+      // a wide screen would stretch the bar across the whole monitor while the
+      // content sits in a 430px column. Absolute keeps it inside that column.
+      className="border-card-border bg-card/95 absolute inset-x-0 bottom-0 z-20 border-t backdrop-blur"
       aria-label="Main"
     >
       <ul className="mx-auto flex w-full max-w-md items-stretch">

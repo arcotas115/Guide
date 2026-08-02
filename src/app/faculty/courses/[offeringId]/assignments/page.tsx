@@ -289,12 +289,22 @@ export default async function FacultyAssignmentsPage({
                           </TableCell>
 
                           <TableCell align="right">
-                            <Link
-                              href={`/faculty/courses/${offeringId}/assignments/${a.id}/edit`}
-                              className="text-ink-muted hover:text-ink text-[13px] underline underline-offset-4 transition-colors"
-                            >
-                              {a.status === 'draft' ? 'Edit draft' : 'Edit'}
-                            </Link>
+                            <div className="flex flex-col items-end gap-1.5">
+                              {a.status !== 'draft' ? (
+                                <Link
+                                  href={`/faculty/courses/${offeringId}/submissions/${a.id}`}
+                                  className="text-ink hover:text-ink text-[13px] font-medium underline underline-offset-4"
+                                >
+                                  Submissions
+                                </Link>
+                              ) : null}
+                              <Link
+                                href={`/faculty/courses/${offeringId}/assignments/${a.id}/edit`}
+                                className="text-ink-muted hover:text-ink text-[13px] underline underline-offset-4 transition-colors"
+                              >
+                                {a.status === 'draft' ? 'Edit draft' : 'Edit'}
+                              </Link>
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
